@@ -5,9 +5,11 @@ import { refresh } from "next/cache";
 import { redirect } from "next/navigation";
 import type { ActionState } from "@/components/action-form";
 import { db } from "@/db";
-import { products, variants } from "@/db/schema";
+import { productMedia, products, variants } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
-import { amount, optional, text, wholeNumber } from "@/lib/format";
+import { amount, isUuid, optional, text, wholeNumber } from "@/lib/format";
+import { isOurUrl, removeFile } from "@/lib/media";
+import { cleanTag } from "@/lib/media-rules";
 import { changeStock, StockError } from "@/lib/stock";
 
 const list = (value: string) => [
@@ -152,7 +154,9 @@ export async function setArchived(productId: string, archived: boolean) {
   refresh();
 }
 
-export async function addVariant(
+// Adds sizes and/or colors. A new size is added for every existing color,
+// a new color for every existing size, and both together add just that one.
+export async function addVariants(
   productId: string,
   _state: ActionState,
   form: FormData,
@@ -160,11 +164,8 @@ export async function addVariant(
   const user = await requireUser();
   const size = optional(form, "size");
   const color = optional(form, "color");
-  const price = amount(form, "price");
-  const cost = amount(form, "cost");
   const stock = text(form, "stock") ? wholeNumber(form, "stock") : 0;
   if (!size && !color) return { error: "Enter a size or a color." };
-  if (price === null || cost === null) return { error: "Prices must be numbers." };
   if (!(stock >= 0)) return { error: "Stock must be a whole number, 0 or more." };
 
   const [product] = await db
@@ -173,50 +174,108 @@ export async function addVariant(
     .where(eq(products.id, productId));
   if (!product) return { error: "Product not found." };
 
-  const sku = await uniqueSku(skuFor(product.name, size, color), new Set());
-  await db.transaction(async (tx) => {
-    const [variant] = await tx
-      .insert(variants)
-      .values({ productId, sku, size, color, price, cost })
-      .returning({ id: variants.id });
-    await changeStock(tx, {
-      variantId: variant.id,
-      change: stock,
-      reason: "opening",
-      userId: user.id,
+  const existing = await db
+    .select()
+    .from(variants)
+    .where(eq(variants.productId, productId))
+    .orderBy(variants.createdAt);
+  const sizes = [...new Set(existing.map((v) => v.size))];
+  const colors = [...new Set(existing.map((v) => v.color))];
+  const combos =
+    size && color
+      ? [{ size, color }]
+      : size
+        ? (colors.length ? colors : [null]).map((c) => ({ size, color: c }))
+        : (sizes.length ? sizes : [null]).map((s) => ({ size: s, color }));
+  const same = (a: string | null, b: string | null) =>
+    (a ?? "").toLowerCase() === (b ?? "").toLowerCase();
+  const fresh = combos.filter(
+    (combo) =>
+      !existing.some((v) => same(v.size, combo.size) && same(v.color, combo.color)),
+  );
+  if (fresh.length === 0) return { error: "That size and color already exists." };
+
+  // New items start with the same prices as the first existing one.
+  const template = existing[0];
+  const taken = new Set<string>();
+  const rows: (typeof variants.$inferInsert)[] = [];
+  for (const combo of fresh) {
+    rows.push({
+      ...combo,
+      productId,
+      sku: await uniqueSku(skuFor(product.name, combo.size, combo.color), taken),
+      price: template?.price ?? "0",
+      cost: template?.cost ?? "0",
+      lowStockAt: template?.lowStockAt ?? 5,
     });
+  }
+
+  await db.transaction(async (tx) => {
+    const created = await tx.insert(variants).values(rows).returning({ id: variants.id });
+    for (const variant of created) {
+      await changeStock(tx, {
+        variantId: variant.id,
+        change: stock,
+        reason: "opening",
+        userId: user.id,
+      });
+    }
   });
   refresh();
   return { ok: "Added." };
 }
 
-export async function updateVariant(
-  variantId: string,
+// Saves the whole "Prices & codes" table in one go.
+export async function updateVariants(
+  productId: string,
   _state: ActionState,
   form: FormData,
 ): Promise<ActionState> {
   await requireUser();
-  const sku = text(form, "sku");
-  const price = amount(form, "price");
-  const cost = amount(form, "cost");
-  const lowStockAt = wholeNumber(form, "lowStockAt");
-  if (!sku) return { error: "SKU can't be empty." };
-  if (price === null || cost === null) return { error: "Prices must be numbers." };
-  if (!(lowStockAt >= 0)) return { error: "Low stock alert must be 0 or more." };
+  const rows = await db
+    .select({ id: variants.id })
+    .from(variants)
+    .where(eq(variants.productId, productId));
+
+  const changes: {
+    id: string;
+    sku: string;
+    size: string | null;
+    color: string | null;
+    price: string;
+    cost: string;
+    lowStockAt: number;
+  }[] = [];
+  for (const row of rows) {
+    const sku = text(form, `sku:${row.id}`);
+    const price = amount(form, `price:${row.id}`);
+    const cost = amount(form, `cost:${row.id}`);
+    const lowStockAt = wholeNumber(form, `low:${row.id}`);
+    if (!sku) return { error: "SKU can't be empty." };
+    if (price === null || cost === null) return { error: "Prices must be numbers." };
+    if (!(lowStockAt >= 0)) return { error: "Low stock alert must be 0 or more." };
+    changes.push({
+      id: row.id,
+      sku,
+      size: optional(form, `size:${row.id}`),
+      color: optional(form, `color:${row.id}`),
+      price,
+      cost,
+      lowStockAt,
+    });
+  }
+  if (new Set(changes.map((c) => c.sku.toLowerCase())).size !== changes.length) {
+    return { error: "Two rows have the same SKU." };
+  }
+
   try {
-    await db
-      .update(variants)
-      .set({
-        sku,
-        size: optional(form, "size"),
-        color: optional(form, "color"),
-        price,
-        cost,
-        lowStockAt,
-      })
-      .where(eq(variants.id, variantId));
+    await db.transaction(async (tx) => {
+      for (const { id, ...values } of changes) {
+        await tx.update(variants).set(values).where(eq(variants.id, id));
+      }
+    });
   } catch (err) {
-    if (isDuplicate(err)) return { error: "Another item already uses that SKU." };
+    if (isDuplicate(err)) return { error: "Another product already uses one of those SKUs." };
     throw err;
   }
   refresh();
@@ -230,44 +289,106 @@ const adjustments = {
   recount: { reason: "adjustment", sign: 0 },
 } as const;
 
-export async function adjustStock(
-  variantId: string,
+// Applies the numbers typed into the stock grid, all together or not at all.
+export async function adjustStockGrid(
+  productId: string,
   _state: ActionState,
   form: FormData,
 ): Promise<ActionState> {
   const user = await requireUser();
   const kind = adjustments[text(form, "kind") as keyof typeof adjustments];
-  const quantity = wholeNumber(form, "quantity");
   if (!kind) return { error: "Choose what happened." };
-  if (!(quantity >= 0) || (kind.sign !== 0 && quantity === 0)) {
-    return { error: "Enter a whole number." };
-  }
+  const note = optional(form, "note");
 
   try {
-    await db.transaction(async (tx) => {
-      let change = kind.sign * quantity;
-      if (kind.sign === 0) {
+    const changed = await db.transaction(async (tx) => {
+      const rows = await tx
+        .select({ id: variants.id, stock: variants.stock })
+        .from(variants)
+        .where(eq(variants.productId, productId))
+        .for("update");
+      let count = 0;
+      for (const row of rows) {
+        const raw = text(form, `qty:${row.id}`);
+        if (raw === "") continue;
+        const quantity = wholeNumber(form, `qty:${row.id}`);
+        if (!(quantity >= 0)) throw new StockError("Use whole numbers, 0 or more.");
         // Recount: the number typed is the new total on the shelf.
-        const [current] = await tx
-          .select({ stock: variants.stock })
-          .from(variants)
-          .where(eq(variants.id, variantId))
-          .for("update");
-        if (!current) throw new StockError("That item no longer exists.");
-        change = quantity - current.stock;
+        const change = kind.sign === 0 ? quantity - row.stock : kind.sign * quantity;
+        if (change === 0) continue;
+        await changeStock(tx, {
+          variantId: row.id,
+          change,
+          reason: kind.reason,
+          note,
+          userId: user.id,
+        });
+        count++;
       }
-      await changeStock(tx, {
-        variantId,
-        change,
-        reason: kind.reason,
-        note: optional(form, "note"),
-        userId: user.id,
-      });
+      return count;
     });
+    if (changed === 0) return { error: "Type a number in at least one box." };
   } catch (err) {
     if (err instanceof StockError) return { error: err.message };
     throw err;
   }
   refresh();
   return { ok: "Stock updated." };
+}
+
+/* ---------- Photos and videos ---------- */
+
+// Called by the browser after a file has finished uploading.
+export async function addMedia(input: {
+  productId: string;
+  url: string;
+  kind: "image" | "video";
+  tag: string;
+  fileName: string;
+}): Promise<ActionState> {
+  await requireUser();
+  const tag = cleanTag(String(input.tag ?? ""));
+  if (!isUuid(String(input.productId))) return { error: "Product not found." };
+  if (input.kind !== "image" && input.kind !== "video") return { error: "Unknown file type." };
+  if (!tag) return { error: "Choose a tag." };
+  if (typeof input.url !== "string" || !isOurUrl(input.url)) {
+    return { error: "That file did not come from our storage." };
+  }
+
+  const [product] = await db
+    .select({ id: products.id })
+    .from(products)
+    .where(eq(products.id, input.productId));
+  if (!product) return { error: "Product not found." };
+
+  await db.insert(productMedia).values({
+    productId: product.id,
+    kind: input.kind,
+    url: input.url,
+    tag,
+    fileName: String(input.fileName ?? "").slice(0, 200) || null,
+  });
+  refresh();
+  return { ok: "Added." };
+}
+
+export async function setMediaTag(mediaId: string, value: string): Promise<ActionState> {
+  await requireUser();
+  const tag = cleanTag(String(value ?? ""));
+  if (!isUuid(String(mediaId)) || !tag) return { error: "Choose a tag." };
+  await db.update(productMedia).set({ tag }).where(eq(productMedia.id, mediaId));
+  refresh();
+  return { ok: "Saved." };
+}
+
+export async function deleteMedia(mediaId: string): Promise<ActionState> {
+  await requireUser();
+  if (!isUuid(String(mediaId))) return { error: "Not found." };
+  const [removed] = await db
+    .delete(productMedia)
+    .where(eq(productMedia.id, mediaId))
+    .returning({ url: productMedia.url });
+  if (removed) await removeFile(removed.url);
+  refresh();
+  return { ok: "Deleted." };
 }

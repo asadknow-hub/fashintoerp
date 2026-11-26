@@ -74,3 +74,22 @@ export function isUuid(value: string) {
     value,
   );
 }
+
+const SIZE_ORDER = ["XXXS", "XXS", "XS", "S", "M", "L", "XL", "XXL", "2XL", "XXXL", "3XL", "4XL", "5XL"];
+
+// Puts clothing sizes in the order people expect (S, M, L…), numbers lowest
+// first, and anything else in the order it was added.
+export function sortSizes<T extends string | null>(sizes: T[]): T[] {
+  const rank = (size: T, index: number) => {
+    if (size === null) return [3, index];
+    const known = SIZE_ORDER.indexOf(size.toUpperCase());
+    if (known >= 0) return [0, known];
+    const number = Number(size);
+    if (size.trim() !== "" && Number.isFinite(number)) return [1, number];
+    return [2, index];
+  };
+  return sizes
+    .map((size, index) => ({ size, key: rank(size, index) }))
+    .sort((a, b) => a.key[0] - b.key[0] || a.key[1] - b.key[1])
+    .map((entry) => entry.size);
+}

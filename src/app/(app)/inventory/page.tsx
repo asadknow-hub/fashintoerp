@@ -2,7 +2,7 @@ import { and, desc, eq, exists, ilike, or, sql } from "drizzle-orm";
 import Link from "next/link";
 import { Badge, Empty, PageHeader } from "@/components/ui";
 import { db } from "@/db";
-import { products, variants } from "@/db/schema";
+import { productMedia, products, variants } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
 import { formatMoney } from "@/lib/format";
 import { getPrefs } from "@/lib/settings";
@@ -28,8 +28,17 @@ export default async function InventoryPage({
       id: products.id,
       name: products.name,
       category: products.category,
-      variantCount: sql<number>`count(${variants.id})::int`,
       stock: sql<number>`coalesce(sum(${variants.stock}), 0)::int`,
+      value: sql<string>`coalesce(sum(${variants.stock} * ${variants.cost}), 0)`,
+      colors: sql<number>`count(distinct ${variants.color})::int`,
+      sizes: sql<number>`count(distinct ${variants.size})::int`,
+      // The photo tagged "Main photo" if there is one, otherwise the first photo.
+      photo: sql<string | null>`(
+        select ${productMedia.url} from ${productMedia}
+        where ${productMedia.productId} = ${products.id} and ${productMedia.kind} = 'image'
+        order by (${productMedia.tag} = 'Main photo') desc, ${productMedia.createdAt}
+        limit 1
+      )`,
       minPrice: sql<string | null>`min(${variants.price})`,
       maxPrice: sql<string | null>`max(${variants.price})`,
       low,
@@ -110,29 +119,44 @@ export default async function InventoryPage({
               <tr>
                 <th className="th">Product</th>
                 <th className="th">Category</th>
-                <th className="th">Options</th>
-                <th className="th">Price</th>
+                <th className="th">Colors</th>
+                <th className="th">Sizes</th>
+                <th className="th text-right">Price</th>
+                <th className="th text-right">Stock value</th>
                 <th className="th text-right">In stock</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-stone-100">
               {rows.map((row) => (
                 <tr key={row.id} className="hover:bg-stone-50">
-                  <td className="td font-medium">
-                    <Link href={`/inventory/${row.id}`} className="hover:underline">
+                  <td className="px-4 py-2 text-sm font-medium">
+                    <Link
+                      href={`/inventory/${row.id}`}
+                      className="flex items-center gap-3 hover:underline"
+                    >
+                      <span className="size-10 shrink-0 overflow-hidden rounded-md border border-stone-200 bg-stone-100">
+                        {row.photo && (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={row.photo} alt="" loading="lazy" className="size-full object-cover" />
+                        )}
+                      </span>
                       {row.name}
                     </Link>
                   </td>
-                  <td className="td text-stone-600">{row.category ?? "—"}</td>
-                  <td className="td text-stone-600">{row.variantCount}</td>
-                  <td className="td text-stone-600">
+                  <td className="px-4 py-2 text-sm text-stone-600">{row.category ?? "—"}</td>
+                  <td className="px-4 py-2 text-sm text-stone-600 tabular-nums">{row.colors || "—"}</td>
+                  <td className="px-4 py-2 text-sm text-stone-600 tabular-nums">{row.sizes || "—"}</td>
+                  <td className="px-4 py-2 text-right text-sm text-stone-600 tabular-nums">
                     {row.minPrice === null
                       ? "—"
                       : row.minPrice === row.maxPrice
                         ? formatMoney(row.minPrice, currency)
                         : `${formatMoney(row.minPrice, currency)} – ${formatMoney(row.maxPrice, currency)}`}
                   </td>
-                  <td className="td text-right">
+                  <td className="px-4 py-2 text-right text-sm text-stone-600 tabular-nums">
+                    {formatMoney(row.value, currency)}
+                  </td>
+                  <td className="px-4 py-2 text-right text-sm whitespace-nowrap">
                     <span className="mr-2 font-medium tabular-nums">{row.stock}</span>
                     {row.stock === 0 ? (
                       <Badge tone="red">Out</Badge>
@@ -145,6 +169,22 @@ export default async function InventoryPage({
                 </tr>
               ))}
             </tbody>
+            <tfoot>
+              <tr className="border-t border-stone-200 bg-stone-50 text-sm font-semibold">
+                <td className="px-4 py-2.5" colSpan={5}>
+                  Total · {rows.length} {rows.length === 1 ? "product" : "products"}
+                </td>
+                <td className="px-4 py-2.5 text-right tabular-nums">
+                  {formatMoney(
+                    rows.reduce((sum, row) => sum + Number(row.value), 0),
+                    currency,
+                  )}
+                </td>
+                <td className="px-4 py-2.5 text-right tabular-nums">
+                  {rows.reduce((sum, row) => sum + row.stock, 0)} units
+                </td>
+              </tr>
+            </tfoot>
           </table>
         </div>
       )}

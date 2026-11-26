@@ -16,6 +16,7 @@ export function ActionForm({
   submit,
   className,
   submitClassName = "btn",
+  footerClassName,
   confirm,
 }: {
   action: FormAction;
@@ -23,6 +24,8 @@ export function ActionForm({
   submit: string;
   className?: string;
   submitClassName?: string;
+  // Wraps the message and button, for forms that need them laid out specially.
+  footerClassName?: string;
   confirm?: string;
 }) {
   const [state, run, pending] = useActionState(action, null);
@@ -44,21 +47,27 @@ export function ActionForm({
       }}
     >
       {children}
-      {state?.error && (
-        <p role="alert" className="text-sm text-rose-700">
-          {state.error}
-        </p>
-      )}
-      {state?.ok && (
-        <p role="status" className="text-sm text-emerald-700">
-          {state.ok}
-        </p>
-      )}
-      <div>
-        <button type="submit" disabled={pending} className={submitClassName}>
-          {pending ? "Saving…" : submit}
-        </button>
-      </div>
+      <Footer className={footerClassName}>
+        {state?.error && (
+          <p role="alert" className="text-sm text-rose-700">
+            {state.error}
+          </p>
+        )}
+        {state?.ok && (
+          <p role="status" className="text-sm text-emerald-700">
+            {state.ok}
+          </p>
+        )}
+        <div>
+          <button type="submit" disabled={pending} className={submitClassName}>
+            {pending ? "Saving…" : submit}
+          </button>
+        </div>
+      </Footer>
     </form>
   );
+}
+
+function Footer({ className, children }: { className?: string; children: React.ReactNode }) {
+  return className ? <div className={className}>{children}</div> : <>{children}</>;
 }

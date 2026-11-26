@@ -34,6 +34,10 @@ body {
   .card {
     @apply rounded-xl border border-stone-200 bg-white;
   }
+  /* Spreadsheet-style cell: looks like plain text until you click into it. */
+  .cell {
+    @apply block w-full min-w-0 rounded-md border border-transparent bg-transparent px-2 py-1.5 text-sm outline-none hover:border-stone-300 focus:border-stone-900 focus:bg-white focus:ring-1 focus:ring-stone-900;
+  }
   .label {
     @apply mb-1 block text-xs font-medium text-stone-600;
   }

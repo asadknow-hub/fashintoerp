@@ -24,6 +24,31 @@ export function PageHeader({
   );
 }
 
+// A titled box. Pages are built out of these so everything has a clear place.
+export function Block({
+  title,
+  aside,
+  children,
+  flush = false,
+  className,
+}: {
+  title: string;
+  aside?: React.ReactNode;
+  children: React.ReactNode;
+  flush?: boolean;
+  className?: string;
+}) {
+  return (
+    <section className={"card overflow-hidden " + (className ?? "")}>
+      <header className="flex min-h-11 flex-wrap items-center justify-between gap-2 border-b border-stone-200 bg-stone-50 px-4 py-2">
+        <h2 className="text-sm font-semibold">{title}</h2>
+        {aside}
+      </header>
+      <div className={flush ? "" : "p-4"}>{children}</div>
+    </section>
+  );
+}
+
 export function Field({
   label,
   hint,

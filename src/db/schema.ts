@@ -76,7 +76,6 @@ export const products = pgTable("products", {
   name: text("name").notNull(),
   category: text("category"),
   description: text("description"),
-  imageUrl: text("image_url"),
   archived: boolean("archived").notNull().default(false),
   createdAt: createdAt(),
 }).enableRLS();
@@ -102,6 +101,27 @@ export const variants = pgTable(
     index("variants_product_idx").on(t.productId),
     check("variants_stock_not_negative", sql`${t.stock} >= 0`),
   ],
+).enableRLS();
+
+export const mediaKind = pgEnum("media_kind", ["image", "video"]);
+
+// Photos and videos of a product. The tag says what it is: "Size chart",
+// "Inside video" and so on. The files themselves live in file storage; this
+// table only keeps their address.
+export const productMedia = pgTable(
+  "product_media",
+  {
+    id: id(),
+    productId: uuid("product_id")
+      .notNull()
+      .references(() => products.id, { onDelete: "cascade" }),
+    kind: mediaKind("kind").notNull(),
+    url: text("url").notNull(),
+    tag: text("tag").notNull(),
+    fileName: text("file_name"),
+    createdAt: createdAt(),
+  },
+  (t) => [index("product_media_product_idx").on(t.productId, t.createdAt)],
 ).enableRLS();
 
 export const stockReason = pgEnum("stock_reason", [
