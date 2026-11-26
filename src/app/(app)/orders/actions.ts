@@ -2,7 +2,6 @@
 
 import { count, eq, inArray } from "drizzle-orm";
 import { refresh } from "next/cache";
-import { redirect } from "next/navigation";
 import type { ActionState } from "@/components/action-form";
 import { db } from "@/db";
 import {
@@ -172,7 +171,8 @@ export async function createOrder(
     throw err;
   }
 
-  redirect(`/orders/${orderId}`);
+  // The screen clears its saved draft, then opens the new order.
+  return { go: `/orders/${orderId}` };
 }
 
 const statuses = orders.status.enumValues;

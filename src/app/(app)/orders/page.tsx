@@ -1,6 +1,13 @@
-import { and, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
+import { and, count, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import Link from "next/link";
-import { Badge, Empty, orderStatusTone, PageHeader } from "@/components/ui";
+import {
+  Badge,
+  Empty,
+  orderStatusTone,
+  PageHeader,
+  pageNumber,
+  Pager,
+} from "@/components/ui";
 import { db } from "@/db";
 import { customers, orders } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
@@ -9,15 +16,27 @@ import { getPrefs } from "@/lib/settings";
 
 type Status = (typeof orders.status.enumValues)[number];
 
+const PAGE_SIZE = 50;
+
 const filters: { key: string; label: string; statuses?: Status[] }[] = [
   { key: "", label: "All" },
-  { key: "open", label: "To send out", statuses: ["new", "confirmed", "packed"] },
+  {
+    key: "open",
+    label: "To send out",
+    statuses: ["new", "confirmed", "packed"],
+  },
   { key: "shipped", label: "Shipped", statuses: ["shipped"] },
   { key: "delivered", label: "Delivered", statuses: ["delivered"] },
-  { key: "closed", label: "Cancelled / returned", statuses: ["cancelled", "returned"] },
+  {
+    key: "closed",
+    label: "Cancelled / returned",
+    statuses: ["cancelled", "returned"],
+  },
 ];
 
-export default async function OrdersPage({ searchParams }: PageProps<"/orders">) {
+export default async function OrdersPage({
+  searchParams,
+}: PageProps<"/orders">) {
   await requireUser();
   const params = await searchParams;
   const q = typeof params.q === "string" ? params.q.trim() : "";
@@ -26,34 +45,52 @@ export default async function OrdersPage({ searchParams }: PageProps<"/orders">)
   const { currency, timezone } = await getPrefs();
   const number = /^#?\d+$/.test(q) ? Number(q.replace("#", "")) : null;
 
-  const rows = await db
-    .select({
-      id: orders.id,
-      number: orders.number,
-      status: orders.status,
-      payment: orders.payment,
-      total: orders.total,
-      createdAt: orders.createdAt,
-      customer: customers.name,
-      phone: customers.phone,
-      items: sql<number>`(select coalesce(sum(quantity), 0)::int from order_items where order_id = ${orders.id})`,
-    })
-    .from(orders)
-    .innerJoin(customers, eq(customers.id, orders.customerId))
-    .where(
-      and(
-        filter.statuses ? inArray(orders.status, filter.statuses) : undefined,
-        q
-          ? or(
-              ilike(customers.name, `%${q}%`),
-              ilike(customers.phone, `%${q}%`),
-              number !== null && number < 2 ** 31 ? eq(orders.number, number) : undefined,
-            )
-          : undefined,
-      ),
-    )
-    .orderBy(desc(orders.createdAt))
-    .limit(200);
+  const page = pageNumber(params.page);
+  const where = and(
+    filter.statuses ? inArray(orders.status, filter.statuses) : undefined,
+    q
+      ? or(
+          ilike(customers.name, `%${q}%`),
+          ilike(customers.phone, `%${q}%`),
+          number !== null && number < 2 ** 31
+            ? eq(orders.number, number)
+            : undefined,
+        )
+      : undefined,
+  );
+  const [[{ total }], rows] = await Promise.all([
+    db
+      .select({ total: count() })
+      .from(orders)
+      .innerJoin(customers, eq(customers.id, orders.customerId))
+      .where(where),
+    db
+      .select({
+        id: orders.id,
+        number: orders.number,
+        status: orders.status,
+        payment: orders.payment,
+        total: orders.total,
+        createdAt: orders.createdAt,
+        customer: customers.name,
+        phone: customers.phone,
+        items: sql<number>`(select coalesce(sum(quantity), 0)::int from order_items where order_id = ${orders.id})`,
+      })
+      .from(orders)
+      .innerJoin(customers, eq(customers.id, orders.customerId))
+      .where(where)
+      .orderBy(desc(orders.createdAt))
+      .limit(PAGE_SIZE)
+      .offset((page - 1) * PAGE_SIZE),
+  ]);
+  const pageHref = (target: number) => {
+    const query = new URLSearchParams();
+    if (filter.key) query.set("status", filter.key);
+    if (q) query.set("q", q);
+    if (target > 1) query.set("page", String(target));
+    const text = query.toString();
+    return text ? `/orders?${text}` : "/orders";
+  };
 
   return (
     <>
@@ -80,7 +117,9 @@ export default async function OrdersPage({ searchParams }: PageProps<"/orders">)
           ))}
         </div>
         <form className="ml-auto flex gap-2">
-          {filter.key && <input type="hidden" name="status" value={filter.key} />}
+          {filter.key && (
+            <input type="hidden" name="status" value={filter.key} />
+          )}
           <input
             name="q"
             defaultValue={q}
@@ -113,7 +152,10 @@ export default async function OrdersPage({ searchParams }: PageProps<"/orders">)
               {rows.map((row) => (
                 <tr key={row.id} className="hover:bg-stone-50">
                   <td className="td font-medium tabular-nums">
-                    <Link href={`/orders/${row.id}`} className="hover:underline">
+                    <Link
+                      href={`/orders/${row.id}`}
+                      className="hover:underline"
+                    >
                       #{row.number}
                     </Link>
                   </td>
@@ -123,7 +165,9 @@ export default async function OrdersPage({ searchParams }: PageProps<"/orders">)
                   <td className="td">
                     {row.customer}
                     {row.phone && (
-                      <span className="block text-xs text-stone-500">{row.phone}</span>
+                      <span className="block text-xs text-stone-500">
+                        {row.phone}
+                      </span>
                     )}
                   </td>
                   <td className="td text-stone-600">{row.items}</td>
@@ -131,7 +175,9 @@ export default async function OrdersPage({ searchParams }: PageProps<"/orders">)
                     {row.payment === "cod" ? "Cash on delivery" : "Paid"}
                   </td>
                   <td className="td">
-                    <Badge tone={orderStatusTone[row.status]}>{row.status}</Badge>
+                    <Badge tone={orderStatusTone[row.status]}>
+                      {row.status}
+                    </Badge>
                   </td>
                   <td className="td text-right tabular-nums">
                     {formatMoney(row.total, currency)}
@@ -142,6 +188,7 @@ export default async function OrdersPage({ searchParams }: PageProps<"/orders">)
           </table>
         </div>
       )}
+      <Pager page={page} pageSize={PAGE_SIZE} total={total} href={pageHref} />
     </>
   );
 }

@@ -1,8 +1,10 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useActionState, useEffect, useRef, startTransition } from "react";
 
-export type ActionState = { error?: string; ok?: string } | null;
+// "go" is the page to open after a successful save.
+export type ActionState = { error?: string; ok?: string; go?: string } | null;
 export type FormAction = (
   state: ActionState,
   form: FormData,
@@ -19,6 +21,7 @@ export function ActionForm({
   footerClassName,
   confirm,
   disabled = false,
+  onSaved,
 }: {
   action: FormAction;
   children?: React.ReactNode;
@@ -30,13 +33,28 @@ export function ActionForm({
   confirm?: string;
   // Holds the button back while something on the form still needs fixing.
   disabled?: boolean;
+  // Runs after a successful save, before moving to the next page.
+  onSaved?: () => void;
 }) {
   const [state, run, pending] = useActionState(action, null);
   const ref = useRef<HTMLFormElement>(null);
+  const router = useRouter();
+  const saved = useRef(onSaved);
+  // Remembers which save has already been followed, so coming back to this
+  // page with the browser's Back button doesn't jump forward again.
+  const followed = useRef<ActionState>(null);
+  useEffect(() => {
+    saved.current = onSaved;
+  });
 
   useEffect(() => {
     if (state?.ok) ref.current?.reset();
-  }, [state]);
+    if (state?.go && followed.current !== state) {
+      followed.current = state;
+      saved.current?.();
+      router.push(state.go);
+    }
+  }, [state, router]);
 
   return (
     <form
@@ -63,8 +81,12 @@ export function ActionForm({
           </p>
         )}
         <div>
-          <button type="submit" disabled={pending || disabled} className={submitClassName}>
-            {pending ? "Saving…" : submit}
+          <button
+            type="submit"
+            disabled={pending || disabled || !!state?.go}
+            className={submitClassName}
+          >
+            {pending || state?.go ? "Saving…" : submit}
           </button>
         </div>
       </Footer>

@@ -22,11 +22,13 @@ One place to run the business: stock, orders, customers and customer chats.
 ## Before relying on it for the business
 
 - **Backups.** Supabase's free plan keeps no backups and pauses a project
-  after a week without activity. Move to the Pro plan (daily backups) before
-  the data matters.
+  after a week without activity. Until you move to the Pro plan (daily
+  backups), use **Settings → Download backup** every week; the dashboard
+  reminds the owner when a week has passed.
+- **Recovery code.** Each person can create a one-time code in Settings for
+  getting back in after a forgotten password. An owner without one can be
+  locked out.
 - **Vercel plan.** The Hobby plan is for personal, non-commercial use.
-- **Lists** show the newest 200 orders and 300 products or customers; older
-  ones are found with search.
 - **Chats** are built but not connected to Meta yet.
 
 ## Going live (one time)

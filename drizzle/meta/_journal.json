@@ -29,6 +29,13 @@
       "when": 1795706723427,
       "tag": "0003_media_thumbs",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1795718036508,
+      "tag": "0004_backup_and_recovery",
+      "breakpoints": true
     }
   ]
 }

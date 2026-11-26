@@ -1,5 +1,6 @@
 "use server";
 
+import { randomBytes } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { refresh } from "next/cache";
 import type { ActionState } from "@/components/action-form";
@@ -46,4 +47,24 @@ export async function changePassword(
     .set({ passwordHash: await hashPassword(next) })
     .where(eq(users.id, user.id));
   return { ok: "Password changed." };
+}
+
+// Letters and digits that are hard to mix up when written down.
+const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+// Makes a fresh one-time code for getting back in after a forgotten password.
+// Only its scrambled form is stored, so it is shown this once and never again.
+export async function createRecoveryCode(): Promise<ActionState> {
+  const user = await requireUser();
+  const bytes = randomBytes(20);
+  const letters = [...bytes].map((byte) => CODE_ALPHABET[byte % CODE_ALPHABET.length]);
+  const code = [0, 5, 10, 15].map((start) => letters.slice(start, start + 5).join("")).join("-");
+  await db
+    .update(users)
+    .set({ recoveryHash: await hashPassword(code.replaceAll("-", "")) })
+    .where(eq(users.id, user.id));
+  refresh();
+  return {
+    ok: `Your recovery code is ${code} — write it down and keep it somewhere safe. It will not be shown again.`,
+  };
 }

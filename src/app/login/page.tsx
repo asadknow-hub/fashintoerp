@@ -1,4 +1,5 @@
 import { count } from "drizzle-orm";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Suspense } from "react";
 import { login } from "@/app/auth-actions";
@@ -33,6 +34,9 @@ export default function LoginPage() {
             />
           </Field>
         </ActionForm>
+        <Link href="/recover" className="mt-3 inline-block text-sm text-stone-600 hover:underline">
+          Forgot your password?
+        </Link>
       </div>
     </main>
   );

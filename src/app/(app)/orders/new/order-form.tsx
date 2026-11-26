@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useSyncExternalStore, useTransition } from "react";
 import { ActionForm } from "@/components/action-form";
 import { Field } from "@/components/ui";
 import { formatMoney, variantLabel } from "@/lib/format";
@@ -171,27 +171,112 @@ function ProductPicker({
   );
 }
 
-/* ---------- The form ---------- */
+/* ---------- Draft: a half-typed order survives a refresh ---------- */
 
-export function OrderForm({
-  products,
-  currency,
-  defaults,
-}: {
+const DRAFT_KEY = "fashinto:new-order";
+
+type Draft = {
+  rows: Row[];
+  shippingFee: string;
+  discount: string;
+  customer: { name: string; phone: string; address: string; city: string };
+  payment: string;
+  source: string;
+  notes: string;
+};
+
+function readDraft(): Draft | null {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(DRAFT_KEY) ?? "null") as Draft | null;
+    if (!saved || !Array.isArray(saved.rows) || saved.rows.length === 0 || !saved.customer) {
+      return null;
+    }
+    // "Not chosen yet" can't be stored as-is, so it is stored as a marker.
+    const rows = saved.rows.map((row) => ({
+      ...row,
+      color: (row.color as unknown) === UNSET ? undefined : row.color,
+      size: (row.size as unknown) === UNSET ? undefined : row.size,
+    }));
+    return { ...saved, rows };
+  } catch {
+    return null;
+  }
+}
+
+function writeDraft(draft: Draft | null) {
+  try {
+    if (!draft) return window.localStorage.removeItem(DRAFT_KEY);
+    const rows = draft.rows.map((row) => ({
+      ...row,
+      color: row.color === undefined ? UNSET : row.color,
+      size: row.size === undefined ? UNSET : row.size,
+    }));
+    window.localStorage.setItem(DRAFT_KEY, JSON.stringify({ ...draft, rows }));
+  } catch {
+    // Storage can be blocked (private windows); the form still works without it.
+  }
+}
+
+const UNSET = "\u0000unset";
+const never = () => () => {};
+
+type Props = {
   products: OrderProduct[];
   currency: string;
   defaults: { name: string; phone: string; conversationId: string; source: string };
-}) {
-  const [rows, setRows] = useState<Row[]>([blank(0)]);
-  const [shippingFee, setShippingFee] = useState("");
-  const [discount, setDiscount] = useState("");
-  const [customer, setCustomer] = useState({
-    name: defaults.name,
-    phone: defaults.phone,
-    address: "",
-    city: "",
-  });
+};
+
+/* ---------- The form ---------- */
+
+// The draft lives in the browser, so the form is only drawn there.
+export function OrderForm(props: Props) {
+  const inBrowser = useSyncExternalStore(
+    never,
+    () => true,
+    () => false,
+  );
+  return inBrowser ? <Editor {...props} /> : <div className="card h-80 animate-pulse" />;
+}
+
+function Editor({ products, currency, defaults }: Props) {
+  // An order started from a chat begins with that customer, not an old draft.
+  const fromChat = !!(defaults.conversationId || defaults.name || defaults.phone);
+  const [draft] = useState(() => (fromChat ? null : readDraft()));
+  const [restored, setRestored] = useState(draft !== null);
+  const [rows, setRows] = useState<Row[]>(draft?.rows ?? [blank(0)]);
+  const [shippingFee, setShippingFee] = useState(draft?.shippingFee ?? "");
+  const [discount, setDiscount] = useState(draft?.discount ?? "");
+  const [customer, setCustomer] = useState(
+    draft?.customer ?? { name: defaults.name, phone: defaults.phone, address: "", city: "" },
+  );
+  const [payment, setPayment] = useState(draft?.payment ?? "cod");
+  const [source, setSource] = useState(draft?.source ?? defaults.source);
+  const [notes, setNotes] = useState(draft?.notes ?? "");
   const [known, setKnown] = useState<string | null>(null);
+
+  const touched =
+    rows.some((row) => row.productId) || !!(customer.name || customer.phone || notes);
+
+  // Keep a copy of everything typed, so a refresh doesn't lose it.
+  useEffect(() => {
+    if (fromChat) return;
+    writeDraft(
+      touched ? { rows, shippingFee, discount, customer, payment, source, notes } : null,
+    );
+  }, [fromChat, touched, rows, shippingFee, discount, customer, payment, source, notes]);
+
+  const startOver = () => {
+    setRows([blank(0)]);
+    setShippingFee("");
+    setDiscount("");
+    setCustomer({ name: "", phone: "", address: "", city: "" });
+    setPayment("cod");
+    setSource("");
+    setNotes("");
+    setKnown(null);
+    setRestored(false);
+    writeDraft(null);
+  };
   const [, startLookup] = useTransition();
 
   const productOf = (row: Row) => products.find((product) => product.id === row.productId);
@@ -295,9 +380,18 @@ export function OrderForm({
       action={createOrder}
       submit="Create order"
       disabled={hold !== null}
+      onSaved={startOver}
       className="grid items-start gap-3 lg:grid-cols-[minmax(0,1fr)_23rem]"
       footerClassName="flex flex-wrap items-center gap-3 lg:col-start-2"
     >
+      {restored && (
+        <p className="card flex flex-wrap items-center gap-2 border-amber-300 bg-amber-50 px-3 py-1.5 text-xs text-amber-900 lg:col-span-2">
+          You have an unfinished order from before. It&apos;s all still here.
+          <button type="button" onClick={startOver} className="cursor-pointer font-semibold underline">
+            Start over instead
+          </button>
+        </p>
+      )}
       <input type="hidden" name="conversationId" value={defaults.conversationId} />
       <input
         type="hidden"
@@ -311,7 +405,7 @@ export function OrderForm({
         )}
       />
 
-      <section className="card lg:col-start-1 lg:row-span-3 lg:row-start-1">
+      <section className="card lg:col-start-1 lg:row-span-3">
         <header className="flex min-h-9 items-center justify-between border-b border-stone-300 bg-stone-100 px-3 py-1">
           <h2 className={sectionTitle}>Items</h2>
           <span className="text-xs text-stone-500">
@@ -548,7 +642,7 @@ export function OrderForm({
         )}
       </section>
 
-      <section className="card space-y-2 p-3 lg:col-start-2 lg:row-start-1">
+      <section className="card space-y-2 p-3 lg:col-start-2">
         <h2 className={sectionTitle}>Customer</h2>
         <div className="grid grid-cols-2 gap-2">
           <Field label="Phone" hint={known ?? undefined}>
@@ -589,11 +683,16 @@ export function OrderForm({
         </div>
       </section>
 
-      <section className="card space-y-2 p-3 lg:col-start-2 lg:row-start-2">
+      <section className="card space-y-2 p-3 lg:col-start-2">
         <h2 className={sectionTitle}>Payment & delivery</h2>
         <div className="grid grid-cols-2 gap-2">
           <Field label="Payment">
-            <select name="payment" className="input" defaultValue="cod">
+            <select
+              name="payment"
+              className="input"
+              value={payment}
+              onChange={(event) => setPayment(event.target.value)}
+            >
               <option value="cod">Cash on delivery</option>
               <option value="prepaid">Already paid</option>
             </select>
@@ -602,7 +701,8 @@ export function OrderForm({
             <input
               name="source"
               placeholder="Instagram, WhatsApp…"
-              defaultValue={defaults.source}
+              value={source}
+              onChange={(event) => setSource(event.target.value)}
               className="input"
             />
           </Field>
@@ -626,7 +726,13 @@ export function OrderForm({
           </Field>
         </div>
         <Field label="Notes (optional)">
-          <textarea name="notes" rows={2} className="input" />
+          <textarea
+            name="notes"
+            rows={2}
+            value={notes}
+            onChange={(event) => setNotes(event.target.value)}
+            className="input"
+          />
         </Field>
 
         <dl className="space-y-0.5 border-t border-stone-300 pt-2 text-sm tabular-nums">

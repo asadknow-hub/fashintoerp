@@ -29,6 +29,8 @@ export const settings = pgTable("settings", {
   businessName: text("business_name").notNull(),
   currency: text("currency").notNull().default("USD"),
   timezone: text("timezone").notNull().default("UTC"),
+  // When an owner last downloaded a safety copy of the data.
+  lastBackupAt: timestamp("last_backup_at", { withTimezone: true }),
   createdAt: createdAt(),
 }).enableRLS();
 
@@ -41,6 +43,8 @@ export const users = pgTable("users", {
   name: text("name").notNull(),
   email: text("email").notNull().unique(),
   passwordHash: text("password_hash").notNull(),
+  // Scrambled one-time code for getting back in after a forgotten password.
+  recoveryHash: text("recovery_hash"),
   role: userRole("role").notNull().default("staff"),
   active: boolean("active").notNull().default(true),
   createdAt: createdAt(),

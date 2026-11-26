@@ -1,11 +1,13 @@
-import { and, desc, eq, exists, ilike, or, sql } from "drizzle-orm";
+import { and, count, desc, eq, exists, ilike, or, sql } from "drizzle-orm";
 import Link from "next/link";
-import { Badge, Empty, PageHeader } from "@/components/ui";
+import { Badge, Empty, PageHeader, pageNumber, Pager } from "@/components/ui";
 import { db } from "@/db";
 import { productMedia, products, variants } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
 import { formatMoney } from "@/lib/format";
 import { getPrefs } from "@/lib/settings";
+
+const PAGE_SIZE = 48;
 
 const views = [
   { key: "", label: "Active" },
@@ -22,16 +24,19 @@ export default async function InventoryPage({
   const view = typeof params.view === "string" ? params.view : "";
   const { currency } = await getPrefs();
 
+  const page = pageNumber(params.page);
   const low = sql<boolean>`coalesce(bool_or(${variants.stock} <= ${variants.lowStockAt}), false)`;
-  const rows = await db
+  // Every product that matches the tab and search, with its stock summed up.
+  const matching = db
     .select({
       id: products.id,
       name: products.name,
       category: products.category,
-      stock: sql<number>`coalesce(sum(${variants.stock}), 0)::int`,
-      value: sql<string>`coalesce(sum(${variants.stock} * ${variants.cost}), 0)`,
-      colors: sql<number>`count(distinct ${variants.color})::int`,
-      sizes: sql<number>`count(distinct ${variants.size})::int`,
+      createdAt: products.createdAt,
+      stock: sql<number>`coalesce(sum(${variants.stock}), 0)::int`.as("stock"),
+      value: sql<string>`coalesce(sum(${variants.stock} * ${variants.cost}), 0)`.as("value"),
+      colors: sql<number>`count(distinct ${variants.color})::int`.as("colors"),
+      sizes: sql<number>`count(distinct ${variants.size})::int`.as("sizes"),
       // The small version of the "Main photo" if there is one, otherwise the
       // first photo, otherwise a frame from a video.
       photo: sql<string | null>`(
@@ -41,10 +46,10 @@ export default async function InventoryPage({
         order by (${productMedia.tag} = 'Main photo') desc,
           (${productMedia.kind} = 'image') desc, ${productMedia.createdAt}
         limit 1
-      )`,
-      minPrice: sql<string | null>`min(${variants.price})`,
-      maxPrice: sql<string | null>`max(${variants.price})`,
-      low,
+      )`.as("photo"),
+      minPrice: sql<string | null>`min(${variants.price})`.as("min_price"),
+      maxPrice: sql<string | null>`max(${variants.price})`.as("max_price"),
+      low: low.as("low"),
     })
     .from(products)
     .leftJoin(variants, eq(variants.productId, products.id))
@@ -71,24 +76,41 @@ export default async function InventoryPage({
     )
     .groupBy(products.id)
     .having(view === "low" ? low : undefined)
-    .orderBy(desc(products.createdAt))
-    .limit(300);
+    .as("matching");
+
+  // Totals cover everything that matches, not just the page on screen.
+  const [[totals], rows] = await Promise.all([
+    db
+      .select({
+        products: count(),
+        units: sql<number>`coalesce(sum(${matching.stock}), 0)::int`,
+        value: sql<string>`coalesce(sum(${matching.value}), 0)`,
+      })
+      .from(matching),
+    db
+      .select()
+      .from(matching)
+      .orderBy(desc(matching.createdAt))
+      .limit(PAGE_SIZE)
+      .offset((page - 1) * PAGE_SIZE),
+  ]);
 
   const layout = params.layout === "table" ? "table" : "gallery";
   // Keeps the current filters when switching tab, layout or searching.
-  const href = (changes: { view?: string; layout?: string }) => {
+  const href = (changes: { view?: string; layout?: string; page?: number }) => {
     const query = new URLSearchParams();
     const nextView = changes.view ?? view;
     const nextLayout = changes.layout ?? layout;
     if (nextView) query.set("view", nextView);
     if (nextLayout === "table") query.set("layout", "table");
     if (q) query.set("q", q);
+    if (changes.page && changes.page > 1) query.set("page", String(changes.page));
     const text = query.toString();
     return text ? `/inventory?${text}` : "/inventory";
   };
 
-  const units = rows.reduce((sum, row) => sum + row.stock, 0);
-  const value = rows.reduce((sum, row) => sum + Number(row.value), 0);
+  const units = totals.units;
+  const value = Number(totals.value);
   const price = (row: (typeof rows)[number]) =>
     row.minPrice === null
       ? "—"
@@ -155,7 +177,7 @@ export default async function InventoryPage({
             className="card mb-2 grid grid-cols-3 gap-px overflow-hidden bg-stone-300 text-sm"
           >
             {[
-              ["Products", String(rows.length)],
+              ["Products", String(totals.products)],
               ["Units in stock", String(units)],
               ["Stock value (cost)", formatMoney(value, currency)],
             ].map(([label, text]) => (
@@ -271,7 +293,7 @@ export default async function InventoryPage({
                 <tfoot>
                   <tr className="border-t border-stone-200 bg-stone-50 text-sm font-semibold">
                     <td className="px-4 py-2.5" colSpan={5}>
-                      Total · {rows.length} {rows.length === 1 ? "product" : "products"}
+                      Total · {totals.products} {totals.products === 1 ? "product" : "products"}
                     </td>
                     <td className="px-4 py-2.5 text-right tabular-nums">
                       {formatMoney(value, currency)}
@@ -282,6 +304,12 @@ export default async function InventoryPage({
               </table>
             </div>
           )}
+          <Pager
+            page={page}
+            pageSize={PAGE_SIZE}
+            total={totals.products}
+            href={(target) => href({ page: target })}
+          />
         </>
       )}
     </>

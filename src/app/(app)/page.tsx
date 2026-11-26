@@ -2,7 +2,15 @@ import { and, asc, desc, eq, inArray, lte, notInArray, sql } from "drizzle-orm";
 import Link from "next/link";
 import { Badge, Block, orderStatusTone, PageHeader, stockTone } from "@/components/ui";
 import { db } from "@/db";
-import { conversations, customers, orders, products, variants } from "@/db/schema";
+import {
+  conversations,
+  customers,
+  orders,
+  products,
+  settings,
+  users,
+  variants,
+} from "@/db/schema";
 import { requireUser } from "@/lib/auth";
 import { formatDate, formatDateTime, formatMoney, variantLabel } from "@/lib/format";
 import { getPrefs } from "@/lib/settings";
@@ -10,7 +18,7 @@ import { getPrefs } from "@/lib/settings";
 export default async function DashboardPage() {
   const [user, { currency, timezone }] = await Promise.all([requireUser(), getPrefs()]);
 
-  const [[sales], [toShip], [chats], lowStock, recentOrders, waiting] = await Promise.all([
+  const [[sales], [toShip], [chats], lowStock, recentOrders, waiting, [care]] = await Promise.all([
     db
       .select({
         total: sql<string>`coalesce(sum(${orders.total}), 0)`,
@@ -74,7 +82,27 @@ export default async function DashboardPage() {
       .where(sql`${conversations.unread} > 0`)
       .orderBy(desc(conversations.lastMessageAt))
       .limit(8),
+    // Housekeeping an owner should not forget.
+    db
+      .select({
+        backupDue: sql<boolean>`(select ${settings.lastBackupAt} is null or ${settings.lastBackupAt} < now() - interval '7 days' from ${settings} limit 1)`,
+        hasData: sql<boolean>`exists (select 1 from ${products})`,
+        hasCode: sql<boolean>`${users.recoveryHash} is not null`,
+      })
+      .from(users)
+      .where(eq(users.id, user.id)),
   ]);
+  const reminders =
+    user.role === "owner"
+      ? [
+          care?.backupDue && care.hasData
+            ? "You haven't downloaded a safety copy of your data in the last 7 days."
+            : null,
+          care && !care.hasCode
+            ? "You have no recovery code, so a forgotten password could lock you out."
+            : null,
+        ].filter((text) => text !== null)
+      : [];
 
   const stats = [
     {
@@ -108,6 +136,20 @@ export default async function DashboardPage() {
   return (
     <>
       <PageHeader title={`Hello, ${user.name.split(" ")[0]}`} subtitle="Today at a glance." />
+
+      {reminders.length > 0 && (
+        <div
+          data-reminders
+          className="card mb-3 space-y-0.5 border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+        >
+          {reminders.map((text) => (
+            <p key={text}>{text}</p>
+          ))}
+          <Link href="/settings" className="inline-block font-semibold underline">
+            Fix this in Settings
+          </Link>
+        </div>
+      )}
 
       <div className="card mb-3 grid grid-cols-2 gap-px overflow-hidden bg-stone-300 lg:grid-cols-4">
         {stats.map((stat) => (

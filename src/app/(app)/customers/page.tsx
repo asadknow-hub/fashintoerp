@@ -1,11 +1,13 @@
-import { desc, eq, ilike, or, sql } from "drizzle-orm";
+import { count, desc, eq, ilike, or, sql } from "drizzle-orm";
 import Link from "next/link";
-import { Empty, PageHeader } from "@/components/ui";
+import { Empty, PageHeader, pageNumber, Pager } from "@/components/ui";
 import { db } from "@/db";
 import { customers, orders } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
 import { formatDate, formatMoney } from "@/lib/format";
 import { getPrefs } from "@/lib/settings";
+
+const PAGE_SIZE = 50;
 
 export default async function CustomersPage({
   searchParams,
@@ -15,26 +17,37 @@ export default async function CustomersPage({
   const q = typeof params.q === "string" ? params.q.trim() : "";
   const { currency, timezone } = await getPrefs();
 
-  const rows = await db
-    .select({
-      id: customers.id,
-      name: customers.name,
-      phone: customers.phone,
-      city: customers.city,
-      createdAt: customers.createdAt,
-      orderCount: sql<number>`count(${orders.id})::int`,
-      spent: sql<string>`coalesce(sum(${orders.total}) filter (where ${orders.status} not in ('cancelled', 'returned')), 0)`,
-    })
-    .from(customers)
-    .leftJoin(orders, eq(orders.customerId, customers.id))
-    .where(
-      q
-        ? or(ilike(customers.name, `%${q}%`), ilike(customers.phone, `%${q}%`))
-        : undefined,
-    )
-    .groupBy(customers.id)
-    .orderBy(desc(customers.createdAt))
-    .limit(300);
+  const page = pageNumber(params.page);
+  const where = q
+    ? or(ilike(customers.name, `%${q}%`), ilike(customers.phone, `%${q}%`))
+    : undefined;
+  const [[{ total }], rows] = await Promise.all([
+    db.select({ total: count() }).from(customers).where(where),
+    db
+      .select({
+        id: customers.id,
+        name: customers.name,
+        phone: customers.phone,
+        city: customers.city,
+        createdAt: customers.createdAt,
+        orderCount: sql<number>`count(${orders.id})::int`,
+        spent: sql<string>`coalesce(sum(${orders.total}) filter (where ${orders.status} not in ('cancelled', 'returned')), 0)`,
+      })
+      .from(customers)
+      .leftJoin(orders, eq(orders.customerId, customers.id))
+      .where(where)
+      .groupBy(customers.id)
+      .orderBy(desc(customers.createdAt))
+      .limit(PAGE_SIZE)
+      .offset((page - 1) * PAGE_SIZE),
+  ]);
+  const pageHref = (target: number) => {
+    const query = new URLSearchParams();
+    if (q) query.set("q", q);
+    if (target > 1) query.set("page", String(target));
+    const text = query.toString();
+    return text ? `/customers?${text}` : "/customers";
+  };
 
   return (
     <>
@@ -80,8 +93,12 @@ export default async function CustomersPage({
                   </td>
                   <td className="td text-stone-600">{row.phone ?? "—"}</td>
                   <td className="td text-stone-600">{row.city ?? "—"}</td>
-                  <td className="td text-stone-600">{formatDate(row.createdAt, timezone)}</td>
-                  <td className="td text-right tabular-nums">{row.orderCount}</td>
+                  <td className="td text-stone-600">
+                    {formatDate(row.createdAt, timezone)}
+                  </td>
+                  <td className="td text-right tabular-nums">
+                    {row.orderCount}
+                  </td>
                   <td className="td text-right tabular-nums">
                     {formatMoney(row.spent, currency)}
                   </td>
@@ -91,6 +108,7 @@ export default async function CustomersPage({
           </table>
         </div>
       )}
+      <Pager page={page} pageSize={PAGE_SIZE} total={total} href={pageHref} />
     </>
   );
 }
