@@ -12,10 +12,16 @@ export type GridVariant = {
   lowStockAt: number;
 };
 
+// "recount" is the fresh count: you type what is really on the shelf and the
+// system works out the difference from what it expected.
 const modes = {
-  received: { button: "Receive stock", hint: "Type how many arrived of each." },
-  recount: { button: "Recount", hint: "Type the exact number you counted." },
-  damaged: { button: "Damaged / lost", hint: "Type how many to take off." },
+  recount: {
+    button: "Fresh count",
+    hint: "Type what you counted. Boxes you leave empty stay as they are.",
+    save: "Save count",
+  },
+  received: { button: "Receive stock", hint: "Type how many arrived of each.", save: "Save stock" },
+  damaged: { button: "Damaged / lost", hint: "Type how many to take off.", save: "Save stock" },
 } as const;
 type Mode = keyof typeof modes;
 
@@ -35,6 +41,7 @@ export function StockGrid({
   const [result, run, pending] = useActionState(action, null);
   const [seen, setSeen] = useState(result);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [mode, setMode] = useState<Mode | null>(null);
   const [typed, setTyped] = useState<Record<string, string>>({});
   const [note, setNote] = useState("");
@@ -45,17 +52,17 @@ export function StockGrid({
   if (result !== seen) {
     setSeen(result);
     setError(result?.error ?? null);
+    setNotice(result?.ok ?? null);
     if (!result?.error) setMode(null);
   }
 
   const start = (next: Mode) => {
-    setTyped(
-      next === "recount"
-        ? Object.fromEntries(variants.map((v) => [v.id, String(v.stock)]))
-        : {},
-    );
+    // Every mode starts with empty boxes. A fresh count especially: you type
+    // what you see, not what the system already believes.
+    setTyped({});
     setNote("");
     setError(null);
+    setNotice(null);
     setMode(next);
   };
 
@@ -73,6 +80,18 @@ export function StockGrid({
   const sum = (list: GridVariant[]) => list.reduce((total, v) => total + after(v), 0);
   const before = variants.reduce((total, v) => total + v.stock, 0);
   const total = sum(variants);
+
+  // For a fresh count: how the typed numbers compare with what the system had.
+  const typedNumber = (v: GridVariant) => {
+    const raw = typed[v.id]?.trim();
+    const n = Number(raw);
+    return raw && Number.isInteger(n) && n >= 0 ? n : null;
+  };
+  const counted = variants.filter((v) => typedNumber(v) !== null);
+  const expected = counted.reduce((sum, v) => sum + v.stock, 0);
+  const found = counted.reduce((sum, v) => sum + typedNumber(v)!, 0);
+  const missing = counted.reduce((sum, v) => sum + Math.max(0, v.stock - typedNumber(v)!), 0);
+  const extra = counted.reduce((sum, v) => sum + Math.max(0, typedNumber(v)! - v.stock), 0);
 
   const save = () => {
     if (!mode) return;
@@ -100,7 +119,7 @@ export function StockGrid({
                 key={key}
                 type="button"
                 onClick={() => start(key)}
-                className="btn-secondary btn-sm"
+                className={key === "recount" ? "btn btn-sm" : "btn-secondary btn-sm"}
               >
                 {modes[key].button}
               </button>
@@ -171,7 +190,7 @@ export function StockGrid({
                         inputMode="numeric"
                         aria-label={`${color ?? ""} ${size ?? ""}`.trim() || "Quantity"}
                         value={typed[v.id] ?? ""}
-                        placeholder={mode === "recount" ? "" : "0"}
+                        placeholder={mode === "recount" ? "?" : "0"}
                         onChange={(event) =>
                           setTyped((current) => ({ ...current, [v.id]: event.target.value }))
                         }
@@ -180,9 +199,32 @@ export function StockGrid({
                           (next < 0 ? "border-rose-500 text-rose-700" : "")
                         }
                       />
-                      <span className="mt-0.5 block text-[11px] text-stone-400">
-                        {next === v.stock ? `has ${v.stock}` : `${v.stock} → ${next}`}
-                      </span>
+                      {mode === "recount" ? (
+                        <span
+                          className={
+                            "mt-0.5 block text-[11px] " +
+                            (typedNumber(v) === null
+                              ? "text-stone-400"
+                              : next < v.stock
+                                ? "font-semibold text-rose-700"
+                                : next > v.stock
+                                  ? "font-semibold text-emerald-700"
+                                  : "text-stone-500")
+                          }
+                        >
+                          {typedNumber(v) === null
+                            ? `system ${v.stock}`
+                            : next === v.stock
+                              ? `${v.stock} ✓ matches`
+                              : next < v.stock
+                                ? `${v.stock} → ${next} · ${v.stock - next} missing`
+                                : `${v.stock} → ${next} · ${next - v.stock} extra`}
+                        </span>
+                      ) : (
+                        <span className="mt-0.5 block text-[11px] text-stone-400">
+                          {next === v.stock ? `has ${v.stock}` : `${v.stock} → ${next}`}
+                        </span>
+                      )}
                     </td>
                   );
                 })}
@@ -217,11 +259,30 @@ export function StockGrid({
             aria-label="Note"
             className="input max-w-xs flex-1 py-1.5"
           />
-          <span className="text-xs text-stone-500">
-            {total === before
-              ? "No change yet"
-              : `Total ${before} → ${total} (${total > before ? "+" : ""}${total - before})`}
-          </span>
+          {mode === "recount" ? (
+            <span data-count-summary className="text-xs text-stone-700">
+              {counted.length === 0 ? (
+                "Nothing counted yet"
+              ) : (
+                <>
+                  Counted {counted.length} of {variants.length} · system had{" "}
+                  <b className="tabular-nums">{expected}</b>, you counted{" "}
+                  <b className="tabular-nums">{found}</b>
+                  {missing > 0 && (
+                    <b className="text-rose-700"> · {missing} missing</b>
+                  )}
+                  {extra > 0 && <b className="text-emerald-700"> · {extra} extra</b>}
+                  {missing === 0 && extra === 0 && " · all match"}
+                </>
+              )}
+            </span>
+          ) : (
+            <span className="text-xs text-stone-500">
+              {total === before
+                ? "No change yet"
+                : `Total ${before} → ${total} (${total > before ? "+" : ""}${total - before})`}
+            </span>
+          )}
           <span className="ml-auto flex gap-2">
             <button
               type="button"
@@ -234,14 +295,19 @@ export function StockGrid({
               Cancel
             </button>
             <button type="button" onClick={save} disabled={pending} className="btn btn-sm">
-              {pending ? "Saving…" : "Save stock"}
+              {pending ? "Saving…" : modes[mode].save}
             </button>
           </span>
         </div>
       )}
       {error && (
-        <p role="alert" className="border-t border-stone-200 px-4 py-2 text-sm text-rose-700">
+        <p role="alert" className="border-t border-stone-200 px-3 py-2 text-sm text-rose-700">
           {error}
+        </p>
+      )}
+      {notice && !mode && (
+        <p role="status" className="border-t border-stone-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+          {notice}
         </p>
       )}
     </Block>

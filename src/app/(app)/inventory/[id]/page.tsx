@@ -27,7 +27,7 @@ const reasonLabel = {
   return: "Customer return",
   cancelled: "Order cancelled",
   damage: "Damaged / lost",
-  adjustment: "Recount",
+  adjustment: "Fresh count",
 } as const;
 
 export default async function ProductPage({

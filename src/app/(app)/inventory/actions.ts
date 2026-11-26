@@ -379,19 +379,24 @@ export async function adjustStockGrid(
   const note = optional(form, "note");
 
   try {
-    const changed = await db.transaction(async (tx) => {
+    const tally = await db.transaction(async (tx) => {
       const rows = await tx
         .select({ id: variants.id, stock: variants.stock })
         .from(variants)
         .where(eq(variants.productId, productId))
         .for("update");
-      let count = 0;
+      const result = { typed: 0, changed: 0, missing: 0, extra: 0, skipped: 0 };
       for (const row of rows) {
         const raw = text(form, `qty:${row.id}`);
-        if (raw === "") continue;
+        if (raw === "") {
+          result.skipped++;
+          continue;
+        }
         const quantity = wholeNumber(form, `qty:${row.id}`);
         if (!(quantity >= 0)) throw new StockError("Use whole numbers, 0 or more.");
-        // Recount: the number typed is the new total on the shelf.
+        result.typed++;
+        // Fresh count: the number typed is what is really on the shelf, so
+        // the change is the difference from what the system had.
         const change = kind.sign === 0 ? quantity - row.stock : kind.sign * quantity;
         if (change === 0) continue;
         await changeStock(tx, {
@@ -401,11 +406,32 @@ export async function adjustStockGrid(
           note,
           userId: user.id,
         });
-        count++;
+        result.changed++;
+        if (change < 0) result.missing -= change;
+        else result.extra += change;
       }
-      return count;
+      return result;
     });
-    if (changed === 0) return { error: "Type a number in at least one box." };
+
+    if (kind.sign === 0) {
+      if (tally.typed === 0) return { error: "Type what you counted in at least one box." };
+      refresh();
+      const parts = [
+        tally.changed === 0
+          ? "everything you counted matches the system"
+          : [
+              tally.missing ? `${tally.missing} missing` : null,
+              tally.extra ? `${tally.extra} extra` : null,
+            ]
+              .filter(Boolean)
+              .join(" and ") + ", and stock has been corrected",
+        tally.skipped
+          ? `${tally.skipped} ${tally.skipped === 1 ? "box" : "boxes"} left uncounted`
+          : null,
+      ].filter(Boolean);
+      return { ok: `Fresh count saved: ${parts.join("; ")}.` };
+    }
+    if (tally.changed === 0) return { error: "Type a number in at least one box." };
   } catch (err) {
     if (err instanceof StockError) return { error: err.message };
     throw err;
