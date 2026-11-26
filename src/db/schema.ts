@@ -161,6 +161,42 @@ export const stockMovements = pgTable(
   (t) => [index("stock_movements_variant_idx").on(t.variantId, t.createdAt)],
 ).enableRLS();
 
+// A fresh count is saved as a snapshot: what was counted next to what the
+// system had at that moment. It is for reference only and never changes
+// stock by itself, so it can be edited or deleted freely.
+export const stockCounts = pgTable(
+  "stock_counts",
+  {
+    id: id(),
+    productId: uuid("product_id")
+      .notNull()
+      .references(() => products.id, { onDelete: "cascade" }),
+    note: text("note"),
+    // Set when someone chose to make the real stock match this count.
+    appliedAt: timestamp("applied_at", { withTimezone: true }),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => [index("stock_counts_product_idx").on(t.productId, t.createdAt)],
+).enableRLS();
+
+export const stockCountLines = pgTable(
+  "stock_count_lines",
+  {
+    id: id(),
+    countId: uuid("count_id")
+      .notNull()
+      .references(() => stockCounts.id, { onDelete: "cascade" }),
+    variantId: uuid("variant_id")
+      .notNull()
+      .references(() => variants.id, { onDelete: "cascade" }),
+    counted: integer("counted").notNull(),
+    // What the system had for this item when it was counted.
+    systemStock: integer("system_stock").notNull(),
+  },
+  (t) => [uniqueIndex("stock_count_lines_unique_idx").on(t.countId, t.variantId)],
+).enableRLS();
+
 /* ---------- Customers & orders ---------- */
 
 export const customers = pgTable(

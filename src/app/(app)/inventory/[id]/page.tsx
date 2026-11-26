@@ -4,14 +4,21 @@ import { notFound } from "next/navigation";
 import { ActionForm } from "@/components/action-form";
 import { Badge, Block, Field } from "@/components/ui";
 import { db } from "@/db";
-import { productMedia, products, stockMovements, users, variants } from "@/db/schema";
+import {
+  productMedia,
+  products,
+  stockCountLines,
+  stockCounts,
+  stockMovements,
+  users,
+  variants,
+} from "@/db/schema";
 import { requireUser } from "@/lib/auth";
 import { formatDateTime, formatMoney, isUuid, sortSizes } from "@/lib/format";
 import { mediaMode, mediaOffReason } from "@/lib/media";
 import { getPrefs } from "@/lib/settings";
 import {
   addVariants,
-  adjustStockGrid,
   setArchived,
   updateProduct,
   updateVariants,
@@ -27,7 +34,7 @@ const reasonLabel = {
   return: "Customer return",
   cancelled: "Order cancelled",
   damage: "Damaged / lost",
-  adjustment: "Fresh count",
+  adjustment: "Stock set from a count",
 } as const;
 
 export default async function ProductPage({
@@ -38,7 +45,15 @@ export default async function ProductPage({
   if (!isUuid(id)) notFound();
 
   // Everything this page needs, fetched at the same time.
-  const [[product], { currency, timezone }, rows, media, history] = await Promise.all([
+  const [
+    [product],
+    { currency, timezone },
+    rows,
+    media,
+    history,
+    countRows,
+    countLines,
+  ] = await Promise.all([
     db.select().from(products).where(eq(products.id, id)),
     getPrefs(),
     db
@@ -74,6 +89,30 @@ export default async function ProductPage({
       .where(eq(variants.productId, id))
       .orderBy(desc(stockMovements.createdAt))
       .limit(40),
+    // Saved fresh counts, newest first, and what was counted in each.
+    db
+      .select({
+        id: stockCounts.id,
+        note: stockCounts.note,
+        createdAt: stockCounts.createdAt,
+        appliedAt: stockCounts.appliedAt,
+        by: users.name,
+      })
+      .from(stockCounts)
+      .leftJoin(users, eq(users.id, stockCounts.createdBy))
+      .where(eq(stockCounts.productId, id))
+      .orderBy(desc(stockCounts.createdAt))
+      .limit(20),
+    db
+      .select({
+        countId: stockCountLines.countId,
+        variantId: stockCountLines.variantId,
+        counted: stockCountLines.counted,
+        system: stockCountLines.systemStock,
+      })
+      .from(stockCountLines)
+      .innerJoin(stockCounts, eq(stockCounts.id, stockCountLines.countId))
+      .where(eq(stockCounts.productId, id)),
   ]);
   if (!product) notFound();
 
@@ -88,14 +127,22 @@ export default async function ProductPage({
 
   const units = items.reduce((sum, v) => sum + v.stock, 0);
   const costValue = items.reduce((sum, v) => sum + v.stock * Number(v.cost), 0);
-  const retailValue = items.reduce((sum, v) => sum + v.stock * Number(v.price), 0);
+  const retailValue = items.reduce(
+    (sum, v) => sum + v.stock * Number(v.price),
+    0,
+  );
   const out = items.filter((v) => v.stock <= 0).length;
-  const low = items.filter((v) => v.stock > 0 && v.stock <= v.lowStockAt).length;
+  const low = items.filter(
+    (v) => v.stock > 0 && v.stock <= v.lowStockAt,
+  ).length;
 
   const stats = [
     { label: "In stock", value: `${units} units` },
     { label: "Stock value (cost)", value: formatMoney(costValue, currency) },
-    { label: "Stock value (selling)", value: formatMoney(retailValue, currency) },
+    {
+      label: "Stock value (selling)",
+      value: formatMoney(retailValue, currency),
+    },
     {
       label: "Needs attention",
       value: out || low ? `${out} out · ${low} low` : "All good",
@@ -107,7 +154,10 @@ export default async function ProductPage({
     <div className="space-y-3">
       <div className="flex flex-wrap items-end justify-between gap-3 border-b-2 border-stone-900 pb-2">
         <div className="min-w-0">
-          <Link href="/inventory" className="text-xs text-stone-500 hover:underline">
+          <Link
+            href="/inventory"
+            className="text-xs text-stone-500 hover:underline"
+          >
             ← Inventory
           </Link>
           <h1 className="flex items-center gap-2 text-xl leading-tight font-bold tracking-tight">
@@ -125,7 +175,9 @@ export default async function ProductPage({
           </p>
         </div>
         <form action={setArchived.bind(null, product.id, !product.archived)}>
-          <SubmitButton>{product.archived ? "Restore product" : "Archive product"}</SubmitButton>
+          <SubmitButton>
+            {product.archived ? "Restore product" : "Archive product"}
+          </SubmitButton>
         </form>
       </div>
 
@@ -133,7 +185,12 @@ export default async function ProductPage({
         {stats.map((stat) => (
           <div key={stat.label} className="bg-white px-3 py-1.5">
             <dt className="text-xs text-stone-500">{stat.label}</dt>
-            <dd className={"mt-0.5 text-base font-semibold tabular-nums " + (stat.tone ?? "")}>
+            <dd
+              className={
+                "mt-0.5 text-base font-semibold tabular-nums " +
+                (stat.tone ?? "")
+              }
+            >
               {stat.value}
             </dd>
           </div>
@@ -152,7 +209,23 @@ export default async function ProductPage({
             }))}
             sizes={sizes}
             colors={colors}
-            action={adjustStockGrid.bind(null, product.id)}
+            productId={product.id}
+            counts={countRows.map((count) => ({
+              id: count.id,
+              note: count.note,
+              when: formatDateTime(count.createdAt, timezone),
+              by: count.by,
+              applied: count.appliedAt
+                ? formatDateTime(count.appliedAt, timezone)
+                : null,
+              lines: countLines
+                .filter((line) => line.countId === count.id)
+                .map(({ variantId, counted, system }) => ({
+                  variantId,
+                  counted,
+                  system,
+                })),
+            }))}
           />
 
           <Block title="Prices & codes" flush>
@@ -169,10 +242,16 @@ export default async function ProductPage({
                       <th className="py-2 pr-2 pl-4 font-medium">Color</th>
                       <th className="px-2 py-2 font-medium">Size</th>
                       <th className="px-2 py-2 font-medium">SKU</th>
-                      <th className="px-2 py-2 text-right font-medium">Price</th>
+                      <th className="px-2 py-2 text-right font-medium">
+                        Price
+                      </th>
                       <th className="px-2 py-2 text-right font-medium">Cost</th>
-                      <th className="px-2 py-2 text-right font-medium whitespace-nowrap">Alert at</th>
-                      <th className="py-2 pr-4 pl-2 text-right font-medium">Stock</th>
+                      <th className="px-2 py-2 text-right font-medium whitespace-nowrap">
+                        Alert at
+                      </th>
+                      <th className="py-2 pr-4 pl-2 text-right font-medium">
+                        Stock
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-stone-100">
@@ -232,16 +311,21 @@ export default async function ProductPage({
                             className="cell text-right tabular-nums"
                           />
                         </td>
-                        <td className="w-16 py-1.5 pr-4 pl-2 text-right tabular-nums">{v.stock}</td>
+                        <td className="w-16 py-1.5 pr-4 pl-2 text-right tabular-nums">
+                          {v.stock}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
                   <tfoot>
                     <tr className="border-t border-stone-200 bg-stone-50 font-semibold">
                       <td className="py-2 pr-2 pl-4" colSpan={6}>
-                        Total · {items.length} {items.length === 1 ? "item" : "items"}
+                        Total · {items.length}{" "}
+                        {items.length === 1 ? "item" : "items"}
                       </td>
-                      <td className="py-2 pr-4 pl-2 text-right tabular-nums">{units}</td>
+                      <td className="py-2 pr-4 pl-2 text-right tabular-nums">
+                        {units}
+                      </td>
                     </tr>
                   </tfoot>
                 </table>
@@ -261,10 +345,19 @@ export default async function ProductPage({
                 <input name="size" placeholder="XL" className="input py-1.5" />
               </Field>
               <Field label="New color">
-                <input name="color" placeholder="Navy" className="input py-1.5" />
+                <input
+                  name="color"
+                  placeholder="Navy"
+                  className="input py-1.5"
+                />
               </Field>
               <Field label="Stock each">
-                <input name="stock" inputMode="numeric" defaultValue="0" className="input py-1.5" />
+                <input
+                  name="stock"
+                  inputMode="numeric"
+                  defaultValue="0"
+                  className="input py-1.5"
+                />
               </Field>
             </ActionForm>
             <p className="mt-2 text-xs text-stone-500">
@@ -292,7 +385,12 @@ export default async function ProductPage({
               className="space-y-3"
             >
               <Field label="Name">
-                <input name="name" defaultValue={product.name} required className="input py-1.5" />
+                <input
+                  name="name"
+                  defaultValue={product.name}
+                  required
+                  className="input py-1.5"
+                />
               </Field>
               <Field label="Category">
                 <input
@@ -315,10 +413,15 @@ export default async function ProductPage({
           <Block title="Stock history" flush>
             <div className="max-h-96 divide-y divide-stone-100 overflow-y-auto">
               {history.length === 0 && (
-                <p className="p-4 text-sm text-stone-500">No stock changes yet.</p>
+                <p className="p-4 text-sm text-stone-500">
+                  No stock changes yet.
+                </p>
               )}
               {history.map((h) => (
-                <div key={h.id} className="flex items-start gap-2 px-3 py-1.5 text-xs">
+                <div
+                  key={h.id}
+                  className="flex items-start gap-2 px-3 py-1.5 text-xs"
+                >
                   <span
                     className={
                       "w-9 shrink-0 text-sm font-semibold tabular-nums " +
@@ -330,8 +433,12 @@ export default async function ProductPage({
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="text-sm">{reasonLabel[h.reason]}</span>
-                    <span className="block truncate font-mono text-stone-500">{h.sku}</span>
-                    {h.note && <span className="block text-stone-500">{h.note}</span>}
+                    <span className="block truncate font-mono text-stone-500">
+                      {h.sku}
+                    </span>
+                    {h.note && (
+                      <span className="block text-stone-500">{h.note}</span>
+                    )}
                   </span>
                   <span className="shrink-0 text-right text-stone-500">
                     {formatDateTime(h.createdAt, timezone)}

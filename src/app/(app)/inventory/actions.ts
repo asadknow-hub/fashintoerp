@@ -1,10 +1,16 @@
 "use server";
 
-import { eq, like } from "drizzle-orm";
+import { and, eq, like } from "drizzle-orm";
 import { refresh } from "next/cache";
 import type { ActionState } from "@/components/action-form";
 import { db } from "@/db";
-import { productMedia, products, variants } from "@/db/schema";
+import {
+  productMedia,
+  products,
+  stockCountLines,
+  stockCounts,
+  variants,
+} from "@/db/schema";
 import { requireUser } from "@/lib/auth";
 import { amount, isUuid, optional, text, wholeNumber } from "@/lib/format";
 import { isOurUrl, removeFile } from "@/lib/media";
@@ -364,10 +370,10 @@ const adjustments = {
   received: { reason: "purchase", sign: 1 },
   returned: { reason: "return", sign: 1 },
   damaged: { reason: "damage", sign: -1 },
-  recount: { reason: "adjustment", sign: 0 },
 } as const;
 
-// Applies the numbers typed into the stock grid, all together or not at all.
+// Adds or removes the numbers typed into the stock grid, all together or not
+// at all.
 export async function adjustStockGrid(
   productId: string,
   _state: ActionState,
@@ -379,65 +385,189 @@ export async function adjustStockGrid(
   const note = optional(form, "note");
 
   try {
-    const tally = await db.transaction(async (tx) => {
+    const changed = await db.transaction(async (tx) => {
       const rows = await tx
-        .select({ id: variants.id, stock: variants.stock })
+        .select({ id: variants.id })
         .from(variants)
         .where(eq(variants.productId, productId))
         .for("update");
-      const result = { typed: 0, changed: 0, missing: 0, extra: 0, skipped: 0 };
+      let count = 0;
       for (const row of rows) {
-        const raw = text(form, `qty:${row.id}`);
-        if (raw === "") {
-          result.skipped++;
-          continue;
-        }
+        if (text(form, `qty:${row.id}`) === "") continue;
         const quantity = wholeNumber(form, `qty:${row.id}`);
         if (!(quantity >= 0)) throw new StockError("Use whole numbers, 0 or more.");
-        result.typed++;
-        // Fresh count: the number typed is what is really on the shelf, so
-        // the change is the difference from what the system had.
-        const change = kind.sign === 0 ? quantity - row.stock : kind.sign * quantity;
-        if (change === 0) continue;
+        if (quantity === 0) continue;
         await changeStock(tx, {
           variantId: row.id,
-          change,
+          change: kind.sign * quantity,
           reason: kind.reason,
           note,
           userId: user.id,
         });
-        result.changed++;
-        if (change < 0) result.missing -= change;
-        else result.extra += change;
+        count++;
       }
-      return result;
+      return count;
     });
-
-    if (kind.sign === 0) {
-      if (tally.typed === 0) return { error: "Type what you counted in at least one box." };
-      refresh();
-      const parts = [
-        tally.changed === 0
-          ? "everything you counted matches the system"
-          : [
-              tally.missing ? `${tally.missing} missing` : null,
-              tally.extra ? `${tally.extra} extra` : null,
-            ]
-              .filter(Boolean)
-              .join(" and ") + ", and stock has been corrected",
-        tally.skipped
-          ? `${tally.skipped} ${tally.skipped === 1 ? "box" : "boxes"} left uncounted`
-          : null,
-      ].filter(Boolean);
-      return { ok: `Fresh count saved: ${parts.join("; ")}.` };
-    }
-    if (tally.changed === 0) return { error: "Type a number in at least one box." };
+    if (changed === 0) return { error: "Type a number in at least one box." };
   } catch (err) {
     if (err instanceof StockError) return { error: err.message };
     throw err;
   }
   refresh();
   return { ok: "Stock updated." };
+}
+
+/* ---------- Fresh counts (snapshots) ---------- */
+
+const tally = (lines: { counted: number; system: number }[]) => {
+  const counted = lines.reduce((sum, line) => sum + line.counted, 0);
+  const system = lines.reduce((sum, line) => sum + line.system, 0);
+  const missing = lines.reduce((sum, line) => sum + Math.max(0, line.system - line.counted), 0);
+  const extra = lines.reduce((sum, line) => sum + Math.max(0, line.counted - line.system), 0);
+  const gap =
+    [missing ? `${missing} missing` : null, extra ? `${extra} extra` : null]
+      .filter(Boolean)
+      .join(" and ") || "all match";
+  return `system had ${system}, you counted ${counted} (${gap})`;
+};
+
+// Saves a fresh count as a snapshot, or updates one that is being edited.
+// Stock itself is not touched.
+export async function saveCount(
+  productId: string,
+  _state: ActionState,
+  form: FormData,
+): Promise<ActionState> {
+  const user = await requireUser();
+  const countId = text(form, "countId");
+  const note = optional(form, "note");
+  if (!isUuid(productId) || (countId && !isUuid(countId))) {
+    return { error: "Product not found." };
+  }
+
+  const rows = await db
+    .select({ id: variants.id, stock: variants.stock })
+    .from(variants)
+    .where(eq(variants.productId, productId));
+  const typed: { variantId: string; counted: number; stock: number }[] = [];
+  for (const row of rows) {
+    if (text(form, `qty:${row.id}`) === "") continue;
+    const counted = wholeNumber(form, `qty:${row.id}`);
+    if (!(counted >= 0) || counted > 1_000_000) {
+      return { error: "Use whole numbers, 0 or more." };
+    }
+    typed.push({ variantId: row.id, counted, stock: row.stock });
+  }
+  if (typed.length === 0) return { error: "Type what you counted in at least one box." };
+
+  const result = await db.transaction(async (tx) => {
+    // When editing, each item keeps the system number it was first compared with.
+    const before = new Map<string, number>();
+    let id = countId;
+    if (id) {
+      const [existing] = await tx
+        .select({ appliedAt: stockCounts.appliedAt })
+        .from(stockCounts)
+        .where(and(eq(stockCounts.id, id), eq(stockCounts.productId, productId)))
+        .for("update");
+      if (!existing) return { error: "That count no longer exists." };
+      if (existing.appliedAt) {
+        return { error: "That count was already used as the stock, so it can't be changed." };
+      }
+      const old = await tx
+        .select({ variantId: stockCountLines.variantId, systemStock: stockCountLines.systemStock })
+        .from(stockCountLines)
+        .where(eq(stockCountLines.countId, id));
+      for (const line of old) before.set(line.variantId, line.systemStock);
+      await tx.update(stockCounts).set({ note }).where(eq(stockCounts.id, id));
+      await tx.delete(stockCountLines).where(eq(stockCountLines.countId, id));
+    } else {
+      const [created] = await tx
+        .insert(stockCounts)
+        .values({ productId, note, createdBy: user.id })
+        .returning({ id: stockCounts.id });
+      id = created.id;
+    }
+    const lines = typed.map((entry) => ({
+      countId: id,
+      variantId: entry.variantId,
+      counted: entry.counted,
+      systemStock: before.get(entry.variantId) ?? entry.stock,
+    }));
+    await tx.insert(stockCountLines).values(lines);
+    return { lines };
+  });
+  if ("error" in result) return { error: result.error };
+
+  refresh();
+  const summary = tally(
+    result.lines.map((line) => ({ counted: line.counted, system: line.systemStock })),
+  );
+  return {
+    ok: `Count ${countId ? "updated" : "saved"} as a snapshot: ${summary}. Stock was not changed.`,
+  };
+}
+
+export async function deleteCount(countId: string): Promise<ActionState> {
+  await requireUser();
+  if (!isUuid(String(countId))) return { error: "That count no longer exists." };
+  await db.delete(stockCounts).where(eq(stockCounts.id, countId));
+  refresh();
+  return { ok: "Count deleted. Stock was not changed." };
+}
+
+// Only when asked: makes the real stock match what was counted.
+export async function applyCount(countId: string): Promise<ActionState> {
+  const user = await requireUser();
+  if (!isUuid(String(countId))) return { error: "That count no longer exists." };
+
+  try {
+    const changed = await db.transaction(async (tx) => {
+      const [count] = await tx
+        .select({ appliedAt: stockCounts.appliedAt })
+        .from(stockCounts)
+        .where(eq(stockCounts.id, countId))
+        .for("update");
+      if (!count) throw new StockError("That count no longer exists.");
+      if (count.appliedAt) throw new StockError("That count was already used as the stock.");
+
+      const lines = await tx
+        .select({
+          variantId: stockCountLines.variantId,
+          counted: stockCountLines.counted,
+          stock: variants.stock,
+        })
+        .from(stockCountLines)
+        .innerJoin(variants, eq(variants.id, stockCountLines.variantId))
+        .where(eq(stockCountLines.countId, countId))
+        .for("update", { of: variants });
+      let total = 0;
+      for (const line of lines) {
+        const change = line.counted - line.stock;
+        if (change === 0) continue;
+        await changeStock(tx, {
+          variantId: line.variantId,
+          change,
+          reason: "adjustment",
+          note: "Stock set from a fresh count",
+          userId: user.id,
+        });
+        total++;
+      }
+      await tx.update(stockCounts).set({ appliedAt: new Date() }).where(eq(stockCounts.id, countId));
+      return total;
+    });
+    refresh();
+    return {
+      ok:
+        changed === 0
+          ? "Stock already matched this count, so nothing changed."
+          : "Stock now matches this count.",
+    };
+  } catch (err) {
+    if (err instanceof StockError) return { error: err.message };
+    throw err;
+  }
 }
 
 /* ---------- Photos and videos ---------- */

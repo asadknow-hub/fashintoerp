@@ -1,8 +1,9 @@
 "use client";
 
-import { startTransition, useActionState, useState } from "react";
-import type { FormAction } from "@/components/action-form";
+import { startTransition, useActionState, useState, useTransition } from "react";
+import type { ActionState } from "@/components/action-form";
 import { Block } from "@/components/ui";
+import { adjustStockGrid, applyCount, deleteCount, saveCount } from "../actions";
 
 export type GridVariant = {
   id: string;
@@ -12,12 +13,20 @@ export type GridVariant = {
   lowStockAt: number;
 };
 
-// "recount" is the fresh count: you type what is really on the shelf and the
-// system works out the difference from what it expected.
+// A saved fresh count: what was counted, next to what the system had then.
+export type CountSnapshot = {
+  id: string;
+  note: string | null;
+  when: string;
+  by: string | null;
+  applied: string | null;
+  lines: { variantId: string; counted: number; system: number }[];
+};
+
 const modes = {
-  recount: {
+  count: {
     button: "Fresh count",
-    hint: "Type what you counted. Boxes you leave empty stay as they are.",
+    hint: "Type what you counted. It is saved as a snapshot and does not change stock.",
     save: "Save count",
   },
   received: { button: "Receive stock", hint: "Type how many arrived of each.", save: "Save stock" },
@@ -25,53 +34,88 @@ const modes = {
 } as const;
 type Mode = keyof typeof modes;
 
+const gap = (missing: number, extra: number) =>
+  [missing ? `${missing} missing` : null, extra ? `${extra} extra` : null]
+    .filter(Boolean)
+    .join(" · ") || "all match";
+
 // A spreadsheet-style view of stock: colors down the side, sizes across the
-// top, totals on the right and bottom. Stock is edited right in the cells.
+// top, totals on the right and bottom. Stock is edited right in the cells,
+// and fresh counts are kept underneath as snapshots.
 export function StockGrid({
+  productId,
   variants,
   sizes,
   colors,
-  action,
+  counts,
 }: {
+  productId: string;
   variants: GridVariant[];
   sizes: (string | null)[];
   colors: (string | null)[];
-  action: FormAction;
+  counts: CountSnapshot[];
 }) {
-  const [result, run, pending] = useActionState(action, null);
+  // One save path for all three modes, so the editor always closes in the
+  // same screen update that brings the fresh numbers.
+  const [result, run, pending] = useActionState(
+    (state: ActionState, form: FormData) =>
+      form.get("kind") === "count"
+        ? saveCount(productId, state, form)
+        : adjustStockGrid(productId, state, form),
+    null,
+  );
   const [seen, setSeen] = useState(result);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [mode, setMode] = useState<Mode | null>(null);
   const [typed, setTyped] = useState<Record<string, string>>({});
   const [note, setNote] = useState("");
+  // The snapshot being edited, if any.
+  const [editing, setEditing] = useState<CountSnapshot | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [working, startWork] = useTransition();
 
-  // When a save comes back, close the editor in the same screen update that
-  // brings the new numbers, so old totals never flash. On an error the typed
-  // numbers stay put.
   if (result !== seen) {
     setSeen(result);
     setError(result?.error ?? null);
     setNotice(result?.ok ?? null);
-    if (!result?.error) setMode(null);
+    // On an error the typed numbers stay put.
+    if (!result?.error) {
+      setMode(null);
+      setEditing(null);
+    }
   }
 
-  const start = (next: Mode) => {
-    // Every mode starts with empty boxes. A fresh count especially: you type
-    // what you see, not what the system already believes.
-    setTyped({});
-    setNote("");
+  const start = (next: Mode, snapshot: CountSnapshot | null = null) => {
+    // A fresh count starts with empty boxes: you type what you see, not what
+    // the system already believes. Editing brings back what was typed before.
+    setTyped(
+      snapshot
+        ? Object.fromEntries(snapshot.lines.map((line) => [line.variantId, String(line.counted)]))
+        : {},
+    );
+    setNote(snapshot?.note ?? "");
+    setEditing(snapshot);
     setError(null);
     setNotice(null);
     setMode(next);
   };
 
-  // What the stock will be once the typed numbers are saved.
-  const after = (v: GridVariant) => {
+  const typedNumber = (v: GridVariant) => {
     const raw = typed[v.id]?.trim();
     const n = Number(raw);
-    if (!mode || !raw || !Number.isInteger(n) || n < 0) return v.stock;
-    if (mode === "recount") return n;
+    return raw && Number.isInteger(n) && n >= 0 ? n : null;
+  };
+
+  // What a count is compared with: the system's number when it was first
+  // counted (kept while editing), otherwise what the system has now.
+  const baseline = (v: GridVariant) =>
+    editing?.lines.find((line) => line.variantId === v.id)?.system ?? v.stock;
+
+  // What the stock will be once saved. A count never changes it.
+  const after = (v: GridVariant) => {
+    const n = typedNumber(v);
+    if (n === null || mode === null || mode === "count") return v.stock;
     return mode === "received" ? v.stock + n : v.stock - n;
   };
 
@@ -81,23 +125,18 @@ export function StockGrid({
   const before = variants.reduce((total, v) => total + v.stock, 0);
   const total = sum(variants);
 
-  // For a fresh count: how the typed numbers compare with what the system had.
-  const typedNumber = (v: GridVariant) => {
-    const raw = typed[v.id]?.trim();
-    const n = Number(raw);
-    return raw && Number.isInteger(n) && n >= 0 ? n : null;
-  };
   const counted = variants.filter((v) => typedNumber(v) !== null);
-  const expected = counted.reduce((sum, v) => sum + v.stock, 0);
+  const expected = counted.reduce((sum, v) => sum + baseline(v), 0);
   const found = counted.reduce((sum, v) => sum + typedNumber(v)!, 0);
-  const missing = counted.reduce((sum, v) => sum + Math.max(0, v.stock - typedNumber(v)!), 0);
-  const extra = counted.reduce((sum, v) => sum + Math.max(0, typedNumber(v)! - v.stock), 0);
+  const missing = counted.reduce((sum, v) => sum + Math.max(0, baseline(v) - typedNumber(v)!), 0);
+  const extra = counted.reduce((sum, v) => sum + Math.max(0, typedNumber(v)! - baseline(v)), 0);
 
   const save = () => {
     if (!mode) return;
     const data = new FormData();
     data.set("kind", mode);
     data.set("note", note);
+    if (editing) data.set("countId", editing.id);
     for (const v of variants) {
       const raw = typed[v.id]?.trim();
       if (raw) data.set(`qty:${v.id}`, raw);
@@ -105,13 +144,25 @@ export function StockGrid({
     startTransition(() => run(data));
   };
 
+  const act = (work: () => Promise<ActionState>) =>
+    startWork(async () => {
+      const outcome = await work();
+      setError(outcome?.error ?? null);
+      setNotice(outcome?.ok ?? null);
+    });
+
+  const th = "px-2 py-1.5 text-center font-semibold text-stone-800";
+
   return (
     <Block
       title="Stock"
       flush
       aside={
         mode ? (
-          <span className="text-xs text-stone-600">{modes[mode].hint}</span>
+          <span className="text-xs text-stone-600">
+            {editing ? `Editing the count from ${editing.when}. ` : ""}
+            {modes[mode].hint}
+          </span>
         ) : (
           <div className="flex flex-wrap gap-1.5">
             {(Object.keys(modes) as Mode[]).map((key) => (
@@ -119,7 +170,7 @@ export function StockGrid({
                 key={key}
                 type="button"
                 onClick={() => start(key)}
-                className={key === "recount" ? "btn btn-sm" : "btn-secondary btn-sm"}
+                className={key === "count" ? "btn btn-sm" : "btn-secondary btn-sm"}
               >
                 {modes[key].button}
               </button>
@@ -136,7 +187,7 @@ export function StockGrid({
                 Color ↓ / Size →
               </th>
               {sizes.map((size) => (
-                <th key={size ?? "-"} className="min-w-14 px-2 py-1.5 text-center font-semibold text-stone-800">
+                <th key={size ?? "-"} className={"min-w-14 " + th}>
                   {size ?? "One size"}
                 </th>
               ))}
@@ -184,13 +235,15 @@ export function StockGrid({
                     );
                   }
                   const next = after(v);
+                  const n = typedNumber(v);
+                  const base = baseline(v);
                   return (
                     <td key={v.id} className="px-1 py-1 text-center">
                       <input
                         inputMode="numeric"
                         aria-label={`${color ?? ""} ${size ?? ""}`.trim() || "Quantity"}
                         value={typed[v.id] ?? ""}
-                        placeholder={mode === "recount" ? "?" : "0"}
+                        placeholder={mode === "count" ? "?" : "0"}
                         onChange={(event) =>
                           setTyped((current) => ({ ...current, [v.id]: event.target.value }))
                         }
@@ -199,26 +252,26 @@ export function StockGrid({
                           (next < 0 ? "border-rose-500 text-rose-700" : "")
                         }
                       />
-                      {mode === "recount" ? (
+                      {mode === "count" ? (
                         <span
                           className={
                             "mt-0.5 block text-[11px] " +
-                            (typedNumber(v) === null
+                            (n === null
                               ? "text-stone-400"
-                              : next < v.stock
+                              : n < base
                                 ? "font-semibold text-rose-700"
-                                : next > v.stock
+                                : n > base
                                   ? "font-semibold text-emerald-700"
                                   : "text-stone-500")
                           }
                         >
-                          {typedNumber(v) === null
-                            ? `system ${v.stock}`
-                            : next === v.stock
-                              ? `${v.stock} ✓ matches`
-                              : next < v.stock
-                                ? `${v.stock} → ${next} · ${v.stock - next} missing`
-                                : `${v.stock} → ${next} · ${next - v.stock} extra`}
+                          {n === null
+                            ? `system ${base}`
+                            : n === base
+                              ? `${base} ✓ matches`
+                              : n < base
+                                ? `system ${base} · ${base - n} missing`
+                                : `system ${base} · ${n - base} extra`}
                         </span>
                       ) : (
                         <span className="mt-0.5 block text-[11px] text-stone-400">
@@ -259,18 +312,15 @@ export function StockGrid({
             aria-label="Note"
             className="input max-w-xs flex-1 py-1.5"
           />
-          {mode === "recount" ? (
+          {mode === "count" ? (
             <span data-count-summary className="text-xs text-stone-700">
               {counted.length === 0 ? (
                 "Nothing counted yet"
               ) : (
                 <>
                   Counted {counted.length} of {variants.length} · system had{" "}
-                  <b className="tabular-nums">{expected}</b>, you counted{" "}
-                  <b className="tabular-nums">{found}</b>
-                  {missing > 0 && (
-                    <b className="text-rose-700"> · {missing} missing</b>
-                  )}
+                  <b>{expected}</b>, you counted <b>{found}</b>
+                  {missing > 0 && <b className="text-rose-700"> · {missing} missing</b>}
                   {extra > 0 && <b className="text-emerald-700"> · {extra} extra</b>}
                   {missing === 0 && extra === 0 && " · all match"}
                 </>
@@ -289,13 +339,14 @@ export function StockGrid({
               onClick={() => {
                 setError(null);
                 setMode(null);
+                setEditing(null);
               }}
               className="btn-secondary btn-sm"
             >
               Cancel
             </button>
             <button type="button" onClick={save} disabled={pending} className="btn btn-sm">
-              {pending ? "Saving…" : modes[mode].save}
+              {pending ? "Saving…" : editing ? "Save changes" : modes[mode].save}
             </button>
           </span>
         </div>
@@ -309,6 +360,154 @@ export function StockGrid({
         <p role="status" className="border-t border-stone-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
           {notice}
         </p>
+      )}
+
+      {counts.length > 0 && !mode && (
+        <div className="border-t border-stone-300" data-count-list>
+          <h3 className="bg-stone-50 px-3 py-1 text-[11px] font-bold tracking-wider text-stone-600 uppercase">
+            Count snapshots
+            <span className="ml-2 font-normal tracking-normal normal-case">
+              For reference only. They don&apos;t change stock, and deleting one changes nothing.
+            </span>
+          </h3>
+          <ul className="divide-y divide-stone-100">
+            {counts.map((count) => {
+              const sumOf = (pick: (line: CountSnapshot["lines"][number]) => number) =>
+                count.lines.reduce((sum, line) => sum + pick(line), 0);
+              const stockNow = (line: CountSnapshot["lines"][number]) =>
+                variants.find((v) => v.id === line.variantId)?.stock ?? line.system;
+              const then = gap(
+                sumOf((line) => Math.max(0, line.system - line.counted)),
+                sumOf((line) => Math.max(0, line.counted - line.system)),
+              );
+              const now = gap(
+                sumOf((line) => Math.max(0, stockNow(line) - line.counted)),
+                sumOf((line) => Math.max(0, line.counted - stockNow(line))),
+              );
+              const open = openId === count.id;
+              return (
+                <li key={count.id} data-count className="px-3 py-1.5 text-sm">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <span className="font-semibold">{count.when}</span>
+                    {count.by && <span className="text-xs text-stone-500">{count.by}</span>}
+                    {count.note && <span className="text-xs text-stone-600">“{count.note}”</span>}
+                    {count.applied && (
+                      <span className="rounded bg-stone-200 px-1.5 py-0.5 text-[11px] font-medium">
+                        Used as stock {count.applied}
+                      </span>
+                    )}
+                    <span className="ml-auto flex flex-wrap gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setOpenId(open ? null : count.id)}
+                        className="btn-secondary btn-sm"
+                      >
+                        {open ? "Hide" : "View"}
+                      </button>
+                      {!count.applied && (
+                        <button
+                          type="button"
+                          disabled={working}
+                          onClick={() => start("count", count)}
+                          className="btn-secondary btn-sm"
+                        >
+                          Edit
+                        </button>
+                      )}
+                      {!count.applied && (
+                        <button
+                          type="button"
+                          disabled={working}
+                          onClick={() => {
+                            if (
+                              window.confirm(
+                                "This changes the real stock to match this count. Only do this if the count is the truth and no orders for these items are still to be entered. Continue?",
+                              )
+                            ) {
+                              act(() => applyCount(count.id));
+                            }
+                          }}
+                          className="btn-secondary btn-sm"
+                        >
+                          Use as stock
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        disabled={working}
+                        onClick={() => {
+                          if (window.confirm("Delete this count? Stock will not change.")) {
+                            act(() => deleteCount(count.id));
+                          }
+                        }}
+                        className="btn-secondary btn-sm text-rose-700"
+                      >
+                        Delete
+                      </button>
+                    </span>
+                  </div>
+                  <p className="text-xs text-stone-600 tabular-nums">
+                    Counted <b>{sumOf((line) => line.counted)}</b> · system had{" "}
+                    <b>{sumOf((line) => line.system)}</b> then ({then}) · system has{" "}
+                    <b>{sumOf(stockNow)}</b> now ({now})
+                  </p>
+
+                  {open && (
+                    <div className="mt-1.5 overflow-x-auto rounded border border-stone-200">
+                      <table className="w-full border-collapse text-xs tabular-nums">
+                        <thead>
+                          <tr className="border-b border-stone-200 text-stone-500">
+                            <th className="px-2 py-1 text-left font-medium">Counted (system then)</th>
+                            {sizes.map((size) => (
+                              <th key={size ?? "-"} className="px-2 py-1 text-center font-semibold">
+                                {size ?? "One size"}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {colors.map((color) => (
+                            <tr key={color ?? "-"} className="border-b border-stone-100 last:border-0">
+                              <th className="px-2 py-1 text-left font-semibold">{color ?? "—"}</th>
+                              {sizes.map((size) => {
+                                const v = find(color, size);
+                                const line = v && count.lines.find((l) => l.variantId === v.id);
+                                return (
+                                  <td
+                                    key={size ?? "-"}
+                                    className={
+                                      "px-2 py-1 text-center " +
+                                      (!line
+                                        ? "text-stone-300"
+                                        : line.counted < line.system
+                                          ? "bg-rose-50 text-rose-800"
+                                          : line.counted > line.system
+                                            ? "bg-emerald-50 text-emerald-800"
+                                            : "")
+                                    }
+                                  >
+                                    {line ? (
+                                      <>
+                                        <b>{line.counted}</b>{" "}
+                                        <span className="text-stone-500">({line.system})</span>
+                                      </>
+                                    ) : (
+                                      "—"
+                                    )}
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
       )}
     </Block>
   );

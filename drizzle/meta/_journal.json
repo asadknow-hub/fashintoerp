@@ -36,6 +36,13 @@
       "when": 1795718036508,
       "tag": "0004_backup_and_recovery",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1795719430465,
+      "tag": "0005_stock_counts",
+      "breakpoints": true
     }
   ]
 }
