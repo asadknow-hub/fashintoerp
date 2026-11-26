@@ -1,6 +1,6 @@
 "use server";
 
-import { eq, inArray } from "drizzle-orm";
+import { count, eq, inArray } from "drizzle-orm";
 import { refresh } from "next/cache";
 import { redirect } from "next/navigation";
 import type { ActionState } from "@/components/action-form";
@@ -10,10 +10,11 @@ import {
   customers,
   orderItems,
   orders,
+  products,
   variants,
 } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
-import { amount, isUuid, optional, text } from "@/lib/format";
+import { amount, cleanPhone, isUuid, optional, text, variantLabel } from "@/lib/format";
 import { changeStock, StockError } from "@/lib/stock";
 
 type Line = { variantId: string; quantity: number; unitPrice: string };
@@ -47,7 +48,7 @@ export async function createOrder(
 ): Promise<ActionState> {
   const user = await requireUser();
   const name = text(form, "name");
-  const phone = optional(form, "phone");
+  const phone = cleanPhone(text(form, "phone")) || null;
   const address = optional(form, "address");
   const city = optional(form, "city");
   const payment = text(form, "payment") === "prepaid" ? "prepaid" : "cod";
@@ -76,23 +77,33 @@ export async function createOrder(
       // Check stock first (and hold it) so a refused order never uses up
       // an order number.
       const found = await tx
-        .select({ id: variants.id, sku: variants.sku, stock: variants.stock })
+        .select({
+          id: variants.id,
+          size: variants.size,
+          color: variants.color,
+          stock: variants.stock,
+          name: products.name,
+        })
         .from(variants)
+        .innerJoin(products, eq(products.id, variants.productId))
         .where(
           inArray(
             variants.id,
             lines.map((l) => l.variantId),
           ),
         )
-        .for("update");
+        .for("update", { of: variants });
       if (found.length !== lines.length) {
         throw new StockError("One of the items no longer exists.");
       }
       for (const line of lines) {
         const item = found.find((v) => v.id === line.variantId)!;
         if (line.quantity > item.stock) {
+          const what = `${item.name} · ${variantLabel(item)}`;
           throw new StockError(
-            `Not enough stock for ${item.sku} (only ${item.stock} left).`,
+            item.stock <= 0
+              ? `${what} is out of stock and can't be ordered. Someone may have just sold the last one.`
+              : `Only ${item.stock} left of ${what}, so ${line.quantity} can't be ordered.`,
           );
         }
       }
@@ -223,4 +234,32 @@ export async function updateOrder(
   }
   refresh();
   return { ok: "Saved." };
+}
+
+// Looks up a returning customer by phone so their details can be filled in.
+export async function lookupCustomer(phoneTyped: string) {
+  await requireUser();
+  const phone = cleanPhone(String(phoneTyped ?? ""));
+  if (phone.replace("+", "").length < 6) return null;
+  const [customer] = await db
+    .select({
+      id: customers.id,
+      name: customers.name,
+      address: customers.address,
+      city: customers.city,
+    })
+    .from(customers)
+    .where(eq(customers.phone, phone))
+    .limit(1);
+  if (!customer) return null;
+  const [{ total }] = await db
+    .select({ total: count() })
+    .from(orders)
+    .where(eq(orders.customerId, customer.id));
+  return {
+    name: customer.name,
+    address: customer.address ?? "",
+    city: customer.city ?? "",
+    orders: total,
+  };
 }

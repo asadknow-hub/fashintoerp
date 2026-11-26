@@ -93,3 +93,10 @@ export function sortSizes<T extends string | null>(sizes: T[]): T[] {
     .sort((a, b) => a.key[0] - b.key[0] || a.key[1] - b.key[1])
     .map((entry) => entry.size);
 }
+
+// Phone numbers are compared without spaces, dashes or brackets, so
+// "0300 123-4567" and "03001234567" are the same customer.
+export function cleanPhone(value: string) {
+  const digits = value.replace(/[^\d+]/g, "");
+  return digits.startsWith("+") ? "+" + digits.slice(1).replace(/\+/g, "") : digits.replace(/\+/g, "");
+}

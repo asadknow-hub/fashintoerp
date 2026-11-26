@@ -18,6 +18,7 @@ export function ActionForm({
   submitClassName = "btn",
   footerClassName,
   confirm,
+  disabled = false,
 }: {
   action: FormAction;
   children?: React.ReactNode;
@@ -27,6 +28,8 @@ export function ActionForm({
   // Wraps the message and button, for forms that need them laid out specially.
   footerClassName?: string;
   confirm?: string;
+  // Holds the button back while something on the form still needs fixing.
+  disabled?: boolean;
 }) {
   const [state, run, pending] = useActionState(action, null);
   const ref = useRef<HTMLFormElement>(null);
@@ -41,6 +44,7 @@ export function ActionForm({
       className={className}
       onSubmit={(event) => {
         event.preventDefault();
+        if (disabled) return;
         if (confirm && !window.confirm(confirm)) return;
         const data = new FormData(event.currentTarget);
         startTransition(() => run(data));
@@ -59,7 +63,7 @@ export function ActionForm({
           </p>
         )}
         <div>
-          <button type="submit" disabled={pending} className={submitClassName}>
+          <button type="submit" disabled={pending || disabled} className={submitClassName}>
             {pending ? "Saving…" : submit}
           </button>
         </div>
