@@ -14,9 +14,20 @@ One place to run the business: stock, orders, customers and customer chats.
 
 | Thing | Where | Cost to start |
 | --- | --- | --- |
-| Database (all your data) | [Supabase](https://supabase.com) — hosted Postgres with backups | Free |
-| The app itself | [Vercel](https://vercel.com) | Free |
+| Database (all your data) | [Supabase](https://supabase.com) — hosted Postgres | Free, but **no backups** on the free plan |
+| The app itself | [Vercel](https://vercel.com) | Free for non-commercial use; a business needs Pro |
+| Photos and videos | Vercel Blob | Free up to 1 GB |
 | Code | This GitHub repository | Free |
+
+## Before relying on it for the business
+
+- **Backups.** Supabase's free plan keeps no backups and pauses a project
+  after a week without activity. Move to the Pro plan (daily backups) before
+  the data matters.
+- **Vercel plan.** The Hobby plan is for personal, non-commercial use.
+- **Lists** show the newest 200 orders and 300 products or customers; older
+  ones are found with search.
+- **Chats** are built but not connected to Meta yet.
 
 ## Going live (one time)
 
