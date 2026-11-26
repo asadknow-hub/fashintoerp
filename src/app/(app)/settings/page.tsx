@@ -1,37 +1,16 @@
-import { asc } from "drizzle-orm";
 import { headers } from "next/headers";
 import { ActionForm } from "@/components/action-form";
 import { Badge, Field, PageHeader } from "@/components/ui";
-import { db } from "@/db";
-import { users } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
 import { channelStatus, webhookReady } from "@/lib/chat";
 import { CURRENCIES } from "@/lib/currencies";
 import { getSettings } from "@/lib/settings";
-import {
-  addTeamMember,
-  changePassword,
-  setMemberActive,
-  updateBusiness,
-} from "./actions";
+import { changePassword, updateBusiness } from "./actions";
 
 export default async function SettingsPage() {
   const user = await requireUser();
   const owner = user.role === "owner";
   const business = await getSettings();
-  const team = owner
-    ? await db
-        .select({
-          id: users.id,
-          name: users.name,
-          email: users.email,
-          role: users.role,
-          active: users.active,
-        })
-        .from(users)
-        .orderBy(asc(users.createdAt))
-    : [];
-
   const requestHeaders = await headers();
   const host = requestHeaders.get("x-forwarded-host") ?? requestHeaders.get("host");
   const protocol = requestHeaders.get("x-forwarded-proto") ?? "https";
@@ -102,49 +81,6 @@ export default async function SettingsPage() {
             </Field>
           </ActionForm>
         </section>
-
-        {owner && (
-          <section className="space-y-3">
-            <h2 className="text-sm font-semibold">Team</h2>
-            <div className="card divide-y divide-stone-100">
-              {team.map((member) => (
-                <div key={member.id} className="flex items-center gap-3 px-4 py-3 text-sm">
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate font-medium">{member.name}</p>
-                    <p className="truncate text-xs text-stone-500">{member.email}</p>
-                  </div>
-                  {member.role === "owner" ? (
-                    <Badge>Owner</Badge>
-                  ) : (
-                    <>
-                      <Badge tone={member.active ? "green" : "gray"}>
-                        {member.active ? "Active" : "Access off"}
-                      </Badge>
-                      <form action={setMemberActive.bind(null, member.id, !member.active)}>
-                        <button className="btn-secondary btn-sm">
-                          {member.active ? "Remove access" : "Give access"}
-                        </button>
-                      </form>
-                    </>
-                  )}
-                </div>
-              ))}
-            </div>
-            <ActionForm action={addTeamMember} submit="Add team member" className="card space-y-3 p-4">
-              <div className="grid gap-3 sm:grid-cols-2">
-                <Field label="Name">
-                  <input name="name" required className="input" />
-                </Field>
-                <Field label="Email">
-                  <input name="email" type="email" required className="input" />
-                </Field>
-              </div>
-              <Field label="Password for them" hint="They can change it after signing in.">
-                <input name="password" type="text" required minLength={8} className="input" />
-              </Field>
-            </ActionForm>
-          </section>
-        )}
 
         {owner && (
           <section className="space-y-3">

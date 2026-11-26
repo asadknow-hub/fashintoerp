@@ -7,14 +7,20 @@ import { getSettings } from "@/lib/settings";
 export default function AppLayout({ children }: LayoutProps<"/">) {
   return (
     <div className="min-h-screen md:flex">
-      <aside className="border-b border-stone-200 bg-stone-100/60 px-3 py-3 md:flex md:w-56 md:shrink-0 md:flex-col md:border-r md:border-b-0 md:py-5">
+      <aside className="z-20 border-b border-stone-200 bg-stone-100 px-3 py-3 md:sticky md:top-0 md:flex md:h-screen md:w-56 md:shrink-0 md:flex-col md:self-start md:border-r md:border-b-0 md:py-5">
         <div className="mb-3 px-3 text-base font-semibold tracking-tight md:mb-5">
           <Suspense fallback="ERP">
             <BusinessName />
           </Suspense>
         </div>
-        <Suspense>
-          <Nav />
+        <Suspense
+          fallback={
+            <Suspense>
+              <Nav />
+            </Suspense>
+          }
+        >
+          <UserNav />
         </Suspense>
         <div className="mt-3 flex items-center justify-between gap-2 px-3 md:mt-auto md:block">
           <p className="truncate text-xs text-stone-500">
@@ -37,6 +43,12 @@ export default function AppLayout({ children }: LayoutProps<"/">) {
       </main>
     </div>
   );
+}
+
+// The Staff link only shows for owners.
+async function UserNav() {
+  const user = await requireUser();
+  return <Nav owner={user.role === "owner"} />;
 }
 
 async function BusinessName() {
