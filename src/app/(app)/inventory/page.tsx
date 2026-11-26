@@ -71,6 +71,39 @@ export default async function InventoryPage({
     .orderBy(desc(products.createdAt))
     .limit(300);
 
+  const layout = params.layout === "table" ? "table" : "gallery";
+  // Keeps the current filters when switching tab, layout or searching.
+  const href = (changes: { view?: string; layout?: string }) => {
+    const query = new URLSearchParams();
+    const nextView = changes.view ?? view;
+    const nextLayout = changes.layout ?? layout;
+    if (nextView) query.set("view", nextView);
+    if (nextLayout === "table") query.set("layout", "table");
+    if (q) query.set("q", q);
+    const text = query.toString();
+    return text ? `/inventory?${text}` : "/inventory";
+  };
+
+  const units = rows.reduce((sum, row) => sum + row.stock, 0);
+  const value = rows.reduce((sum, row) => sum + Number(row.value), 0);
+  const price = (row: (typeof rows)[number]) =>
+    row.minPrice === null
+      ? "—"
+      : row.minPrice === row.maxPrice
+        ? formatMoney(row.minPrice, currency)
+        : `From ${formatMoney(row.minPrice, currency)}`;
+  const status = (row: (typeof rows)[number]) =>
+    row.stock === 0 ? (
+      <Badge tone="red">Out</Badge>
+    ) : row.low ? (
+      <Badge tone="amber">Low</Badge>
+    ) : (
+      <Badge tone="green">OK</Badge>
+    );
+  const pill = (active: boolean) =>
+    "rounded-full px-3 py-1.5 text-xs font-medium " +
+    (active ? "bg-stone-900 text-white" : "bg-stone-200/70 text-stone-700 hover:bg-stone-200");
+
   return (
     <>
       <PageHeader
@@ -79,32 +112,32 @@ export default async function InventoryPage({
         action={{ href: "/inventory/new", label: "Add product" }}
       />
 
-      <div className="mb-4 flex flex-wrap items-center gap-3">
+      <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2">
         <div className="flex gap-1">
           {views.map((v) => (
-            <Link
-              key={v.key}
-              href={v.key ? `/inventory?view=${v.key}` : "/inventory"}
-              className={
-                "rounded-full px-3 py-1.5 text-xs font-medium " +
-                (view === v.key
-                  ? "bg-stone-900 text-white"
-                  : "bg-stone-200/70 text-stone-700 hover:bg-stone-200")
-              }
-            >
+            <Link key={v.key} href={href({ view: v.key })} className={pill(view === v.key)}>
               {v.label}
             </Link>
           ))}
         </div>
+        <div className="flex gap-1 border-l border-stone-300 pl-3" aria-label="Layout">
+          <Link href={href({ layout: "gallery" })} className={pill(layout === "gallery")}>
+            Gallery
+          </Link>
+          <Link href={href({ layout: "table" })} className={pill(layout === "table")}>
+            Table
+          </Link>
+        </div>
         <form className="ml-auto flex gap-2">
           {view && <input type="hidden" name="view" value={view} />}
+          {layout === "table" && <input type="hidden" name="layout" value="table" />}
           <input
             name="q"
             defaultValue={q}
             placeholder="Search name or SKU"
-            className="input w-56"
+            className="input w-52 py-1.5"
           />
-          <button className="btn-secondary">Search</button>
+          <button className="btn-secondary btn-sm">Search</button>
         </form>
       </div>
 
@@ -113,80 +146,140 @@ export default async function InventoryPage({
           {!q && !view && "Add your first product to start tracking stock."}
         </Empty>
       ) : (
-        <div className="card overflow-x-auto">
-          <table className="w-full">
-            <thead className="border-b border-stone-200">
-              <tr>
-                <th className="th">Product</th>
-                <th className="th">Category</th>
-                <th className="th">Colors</th>
-                <th className="th">Sizes</th>
-                <th className="th text-right">Price</th>
-                <th className="th text-right">Stock value</th>
-                <th className="th text-right">In stock</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-stone-100">
+        <>
+          <dl
+            data-totals
+            className="card mb-3 grid grid-cols-3 gap-px overflow-hidden bg-stone-200 text-sm"
+          >
+            {[
+              ["Products", String(rows.length)],
+              ["Units in stock", String(units)],
+              ["Stock value (cost)", formatMoney(value, currency)],
+            ].map(([label, text]) => (
+              <div key={label} className="bg-white px-4 py-2">
+                <dt className="text-xs text-stone-500">{label}</dt>
+                <dd className="font-semibold tabular-nums">{text}</dd>
+              </div>
+            ))}
+          </dl>
+
+          {layout === "gallery" ? (
+            <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
               {rows.map((row) => (
-                <tr key={row.id} className="hover:bg-stone-50">
-                  <td className="px-4 py-2 text-sm font-medium">
-                    <Link
-                      href={`/inventory/${row.id}`}
-                      className="flex items-center gap-3 hover:underline"
-                    >
-                      <span className="size-10 shrink-0 overflow-hidden rounded-md border border-stone-200 bg-stone-100">
-                        {row.photo && (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img src={row.photo} alt="" loading="lazy" className="size-full object-cover" />
-                        )}
-                      </span>
-                      {row.name}
-                    </Link>
-                  </td>
-                  <td className="px-4 py-2 text-sm text-stone-600">{row.category ?? "—"}</td>
-                  <td className="px-4 py-2 text-sm text-stone-600 tabular-nums">{row.colors || "—"}</td>
-                  <td className="px-4 py-2 text-sm text-stone-600 tabular-nums">{row.sizes || "—"}</td>
-                  <td className="px-4 py-2 text-right text-sm text-stone-600 tabular-nums">
-                    {row.minPrice === null
-                      ? "—"
-                      : row.minPrice === row.maxPrice
-                        ? formatMoney(row.minPrice, currency)
-                        : `${formatMoney(row.minPrice, currency)} – ${formatMoney(row.maxPrice, currency)}`}
-                  </td>
-                  <td className="px-4 py-2 text-right text-sm text-stone-600 tabular-nums">
-                    {formatMoney(row.value, currency)}
-                  </td>
-                  <td className="px-4 py-2 text-right text-sm whitespace-nowrap">
-                    <span className="mr-2 font-medium tabular-nums">{row.stock}</span>
-                    {row.stock === 0 ? (
-                      <Badge tone="red">Out</Badge>
-                    ) : row.low ? (
-                      <Badge tone="amber">Low</Badge>
-                    ) : (
-                      <Badge tone="green">OK</Badge>
-                    )}
-                  </td>
-                </tr>
+                <li key={row.id}>
+                  <Link
+                    href={`/inventory/${row.id}`}
+                    className="card group block overflow-hidden hover:border-stone-400"
+                  >
+                    <div className="relative aspect-[4/5] bg-stone-100">
+                      {row.photo ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={row.photo}
+                          alt={row.name}
+                          loading="lazy"
+                          className="size-full object-cover"
+                        />
+                      ) : (
+                        <span className="flex size-full items-center justify-center text-xs text-stone-400">
+                          No photo
+                        </span>
+                      )}
+                      <span className="absolute top-2 right-2">{status(row)}</span>
+                    </div>
+                    <div className="space-y-0.5 px-3 py-2.5">
+                      <p className="truncate text-sm font-medium group-hover:underline">
+                        {row.name}
+                      </p>
+                      <p className="truncate text-xs text-stone-500">
+                        {[
+                          row.category,
+                          row.colors ? `${row.colors} ${row.colors === 1 ? "color" : "colors"}` : null,
+                          row.sizes ? `${row.sizes} ${row.sizes === 1 ? "size" : "sizes"}` : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ") || "One item"}
+                      </p>
+                      <p className="flex flex-wrap items-baseline justify-between gap-x-2 pt-1 text-sm tabular-nums">
+                        <span>{price(row)}</span>
+                        <span className="font-semibold">{row.stock} in stock</span>
+                      </p>
+                    </div>
+                  </Link>
+                </li>
               ))}
-            </tbody>
-            <tfoot>
-              <tr className="border-t border-stone-200 bg-stone-50 text-sm font-semibold">
-                <td className="px-4 py-2.5" colSpan={5}>
-                  Total · {rows.length} {rows.length === 1 ? "product" : "products"}
-                </td>
-                <td className="px-4 py-2.5 text-right tabular-nums">
-                  {formatMoney(
-                    rows.reduce((sum, row) => sum + Number(row.value), 0),
-                    currency,
-                  )}
-                </td>
-                <td className="px-4 py-2.5 text-right tabular-nums">
-                  {rows.reduce((sum, row) => sum + row.stock, 0)} units
-                </td>
-              </tr>
-            </tfoot>
-          </table>
-        </div>
+            </ul>
+          ) : (
+            <div className="card overflow-x-auto">
+              <table className="w-full">
+                <thead className="border-b border-stone-200">
+                  <tr>
+                    <th className="th">Product</th>
+                    <th className="th">Category</th>
+                    <th className="th">Colors</th>
+                    <th className="th">Sizes</th>
+                    <th className="th text-right">Price</th>
+                    <th className="th text-right">Stock value</th>
+                    <th className="th text-right">In stock</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-stone-100">
+                  {rows.map((row) => (
+                    <tr key={row.id} className="hover:bg-stone-50">
+                      <td className="px-4 py-2 text-sm font-medium">
+                        <Link
+                          href={`/inventory/${row.id}`}
+                          className="flex items-center gap-3 hover:underline"
+                        >
+                          <span className="size-10 shrink-0 overflow-hidden rounded-md border border-stone-200 bg-stone-100">
+                            {row.photo && (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                src={row.photo}
+                                alt=""
+                                loading="lazy"
+                                className="size-full object-cover"
+                              />
+                            )}
+                          </span>
+                          {row.name}
+                        </Link>
+                      </td>
+                      <td className="px-4 py-2 text-sm text-stone-600">{row.category ?? "—"}</td>
+                      <td className="px-4 py-2 text-sm text-stone-600 tabular-nums">
+                        {row.colors || "—"}
+                      </td>
+                      <td className="px-4 py-2 text-sm text-stone-600 tabular-nums">
+                        {row.sizes || "—"}
+                      </td>
+                      <td className="px-4 py-2 text-right text-sm text-stone-600 tabular-nums">
+                        {price(row)}
+                      </td>
+                      <td className="px-4 py-2 text-right text-sm text-stone-600 tabular-nums">
+                        {formatMoney(row.value, currency)}
+                      </td>
+                      <td className="px-4 py-2 text-right text-sm whitespace-nowrap">
+                        <span className="mr-2 font-medium tabular-nums">{row.stock}</span>
+                        {status(row)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr className="border-t border-stone-200 bg-stone-50 text-sm font-semibold">
+                    <td className="px-4 py-2.5" colSpan={5}>
+                      Total · {rows.length} {rows.length === 1 ? "product" : "products"}
+                    </td>
+                    <td className="px-4 py-2.5 text-right tabular-nums">
+                      {formatMoney(value, currency)}
+                    </td>
+                    <td className="px-4 py-2.5 text-right tabular-nums">{units} units</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          )}
+        </>
       )}
     </>
   );

@@ -36,6 +36,10 @@ export default function AppLayout({ children }: LayoutProps<"/">) {
               Sign out
             </button>
           </form>
+          {/* Shows which version of the app is live, to make support easier. */}
+          <p className="text-[10px] text-stone-400 max-md:hidden md:mt-2">
+            Version {process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? "dev"}
+          </p>
         </div>
       </aside>
       <main className="min-w-0 flex-1 px-4 py-6 md:px-8 md:py-8">

@@ -7,7 +7,7 @@ import { db } from "@/db";
 import { productMedia, products, stockMovements, users, variants } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
 import { formatDateTime, formatMoney, isUuid, sortSizes } from "@/lib/format";
-import { mediaMode } from "@/lib/media";
+import { mediaMode, mediaOffReason } from "@/lib/media";
 import { getPrefs } from "@/lib/settings";
 import {
   addVariants,
@@ -283,7 +283,12 @@ export default async function ProductPage({
         </div>
 
         <div className="min-w-0 space-y-4">
-          <MediaBlock productId={product.id} items={media} mode={mediaMode()} />
+          <MediaBlock
+            productId={product.id}
+            items={media}
+            mode={mediaMode()}
+            offReason={mediaOffReason()}
+          />
 
           <Block title="Details">
             <ActionForm

@@ -16,6 +16,15 @@ export function mediaMode(): MediaMode {
   return "off";
 }
 
+// A plain-words reason uploads are switched off, or null when they work.
+export function mediaOffReason() {
+  if (mediaMode() !== "off") return null;
+  if (process.env.BLOB_STORE_ID) {
+    return "The Blob store is connected, but without its read-write token, so uploads are switched off. In Vercel, connect the store again with “Add a read-write token” ticked, then redeploy.";
+  }
+  return "File storage isn't connected yet, so uploads are switched off. In Vercel open Storage, create a public Blob store, connect it to this project, then redeploy.";
+}
+
 export function localDir() {
   return path.resolve(/*turbopackIgnore: true*/ process.env.MEDIA_LOCAL_DIR ?? ".uploads");
 }

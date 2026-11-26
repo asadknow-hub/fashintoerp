@@ -12,15 +12,6 @@ import { isOurUrl, removeFile } from "@/lib/media";
 import { cleanTag } from "@/lib/media-rules";
 import { changeStock, StockError } from "@/lib/stock";
 
-const list = (value: string) => [
-  ...new Set(
-    value
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean),
-  ),
-];
-
 const code = (value: string, length: number) =>
   value
     .toUpperCase()
@@ -60,32 +51,72 @@ const isDuplicate = (err: unknown) =>
   ((err as { code?: string }).code === "23505" ||
     (err as { cause?: { code?: string } }).cause?.code === "23505");
 
-export async function createProduct(
-  _state: ActionState,
-  form: FormData,
-): Promise<ActionState> {
+export type NewProduct = {
+  name: string;
+  category: string;
+  description: string;
+  price: string;
+  cost: string;
+  lowStockAt: string;
+  // One entry per size and color combination, with its opening stock.
+  variants: { size: string | null; color: string | null; stock: number }[];
+  media: { url: string; kind: "image" | "video"; tag: string; fileName: string | null }[];
+};
+
+const label = (value: unknown) => {
+  const cleaned = typeof value === "string" ? value.trim().replace(/\s+/g, " ") : "";
+  return cleaned ? cleaned.slice(0, 40) : null;
+};
+
+const money = (value: unknown) => {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "0";
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n.toFixed(2) : null;
+};
+
+// Called by the "Add product" screen with everything typed there.
+export async function createProduct(input: NewProduct): Promise<ActionState> {
   const user = await requireUser();
-  const name = text(form, "name");
-  const price = amount(form, "price");
-  const cost = amount(form, "cost");
-  const stock = text(form, "stock") ? wholeNumber(form, "stock") : 0;
-  const lowStockAt = text(form, "lowStockAt") ? wholeNumber(form, "lowStockAt") : 5;
+  const name = typeof input?.name === "string" ? input.name.trim().slice(0, 120) : "";
+  const price = money(input?.price);
+  const cost = money(input?.cost);
+  const lowRaw = String(input?.lowStockAt ?? "").trim();
+  const lowStockAt = lowRaw === "" ? 5 : Number(lowRaw);
 
   if (!name) return { error: "Give the product a name." };
   if (price === null || cost === null) return { error: "Prices must be numbers." };
-  if (!(stock >= 0)) return { error: "Stock must be a whole number, 0 or more." };
-  if (!(lowStockAt >= 0)) return { error: "Low stock alert must be 0 or more." };
-
-  const sizes = list(text(form, "sizes"));
-  const colors = list(text(form, "colors"));
-  const combos: { size: string | null; color: string | null }[] = [];
-  for (const color of colors.length ? colors : [null]) {
-    for (const size of sizes.length ? sizes : [null]) combos.push({ size, color });
+  if (!Number.isInteger(lowStockAt) || lowStockAt < 0) {
+    return { error: "Low stock alert must be a whole number, 0 or more." };
   }
+
+  const combos: { size: string | null; color: string | null; stock: number }[] = [];
+  const seen = new Set<string>();
+  for (const item of Array.isArray(input?.variants) ? input.variants : []) {
+    const size = label(item?.size);
+    const color = label(item?.color);
+    const stock = Number(item?.stock ?? 0);
+    if (!Number.isInteger(stock) || stock < 0 || stock > 1_000_000) {
+      return { error: "Stock must be whole numbers, 0 or more." };
+    }
+    const key = JSON.stringify([size?.toLowerCase(), color?.toLowerCase()]);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    combos.push({ size, color, stock });
+  }
+  if (combos.length === 0) combos.push({ size: null, color: null, stock: 0 });
   if (combos.length > 200) return { error: "That is too many sizes × colors." };
 
+  const media = Array.isArray(input?.media) ? input.media.slice(0, 40) : [];
+  for (const item of media) {
+    if (typeof item?.url !== "string" || !isOurUrl(item.url)) {
+      return { error: "One of the files did not come from our storage." };
+    }
+    if (item.kind !== "image" && item.kind !== "video") return { error: "Unknown file type." };
+  }
+
   const taken = new Set<string>();
-  const rows: { size: string | null; color: string | null; sku: string }[] = [];
+  const rows: { size: string | null; color: string | null; stock: number; sku: string }[] = [];
   for (const combo of combos) {
     rows.push({
       ...combo,
@@ -98,34 +129,60 @@ export async function createProduct(
       .insert(products)
       .values({
         name,
-        category: optional(form, "category"),
-        description: optional(form, "description"),
+        category: String(input.category ?? "").trim().slice(0, 80) || null,
+        description: String(input.description ?? "").trim().slice(0, 2000) || null,
       })
       .returning({ id: products.id });
-    const created = await tx
-      .insert(variants)
-      .values(
-        rows.map((row) => ({
-          ...row,
+    for (const row of rows) {
+      const [variant] = await tx
+        .insert(variants)
+        .values({
           productId: product.id,
+          sku: row.sku,
+          size: row.size,
+          color: row.color,
           price,
           cost,
           lowStockAt,
-        })),
-      )
-      .returning({ id: variants.id });
-    for (const variant of created) {
+        })
+        .returning({ id: variants.id });
       await changeStock(tx, {
         variantId: variant.id,
-        change: stock,
+        change: row.stock,
         reason: "opening",
         userId: user.id,
       });
+    }
+    if (media.length) {
+      await tx.insert(productMedia).values(
+        media.map((item) => ({
+          productId: product.id,
+          kind: item.kind,
+          url: item.url,
+          tag: cleanTag(String(item.tag ?? "")) || "Gallery",
+          fileName: String(item.fileName ?? "").slice(0, 200) || null,
+        })),
+      );
     }
     return product.id;
   });
 
   redirect(`/inventory/${productId}`);
+}
+
+// Removes a file that was uploaded on the "Add product" screen and then
+// taken off again before saving. Files already attached to a product are
+// left alone.
+export async function discardUpload(url: string): Promise<ActionState> {
+  await requireUser();
+  if (typeof url !== "string" || !isOurUrl(url)) return { error: "Unknown file." };
+  const [attached] = await db
+    .select({ id: productMedia.id })
+    .from(productMedia)
+    .where(eq(productMedia.url, url))
+    .limit(1);
+  if (!attached) await removeFile(url);
+  return null;
 }
 
 export async function updateProduct(
@@ -344,7 +401,7 @@ export async function addMedia(input: {
   url: string;
   kind: "image" | "video";
   tag: string;
-  fileName: string;
+  fileName: string | null;
 }): Promise<ActionState> {
   await requireUser();
   const tag = cleanTag(String(input.tag ?? ""));
