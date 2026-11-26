@@ -18,6 +18,10 @@ const createdAt = () =>
   timestamp("created_at", { withTimezone: true }).notNull().defaultNow();
 const money = (name: string) => numeric(name, { precision: 12, scale: 2 });
 
+// Every table has row level security switched on with no policies. The app
+// connects as the table owner, so it is unaffected, but Supabase's public
+// Data API (anon key) cannot read or write anything.
+
 /* ---------- Business settings (one row) ---------- */
 
 export const settings = pgTable("settings", {
@@ -26,7 +30,7 @@ export const settings = pgTable("settings", {
   currency: text("currency").notNull().default("USD"),
   timezone: text("timezone").notNull().default("UTC"),
   createdAt: createdAt(),
-});
+}).enableRLS();
 
 /* ---------- Team & login ---------- */
 
@@ -40,7 +44,7 @@ export const users = pgTable("users", {
   role: userRole("role").notNull().default("staff"),
   active: boolean("active").notNull().default(true),
   createdAt: createdAt(),
-});
+}).enableRLS();
 
 export const sessions = pgTable(
   "sessions",
@@ -53,7 +57,7 @@ export const sessions = pgTable(
     createdAt: createdAt(),
   },
   (t) => [index("sessions_user_idx").on(t.userId)],
-);
+).enableRLS();
 
 export const loginAttempts = pgTable(
   "login_attempts",
@@ -63,7 +67,7 @@ export const loginAttempts = pgTable(
     createdAt: createdAt(),
   },
   (t) => [index("login_attempts_email_idx").on(t.email, t.createdAt)],
-);
+).enableRLS();
 
 /* ---------- Inventory ---------- */
 
@@ -75,7 +79,7 @@ export const products = pgTable("products", {
   imageUrl: text("image_url"),
   archived: boolean("archived").notNull().default(false),
   createdAt: createdAt(),
-});
+}).enableRLS();
 
 // A variant is one sellable item: e.g. "Linen Shirt / M / Black".
 export const variants = pgTable(
@@ -98,7 +102,7 @@ export const variants = pgTable(
     index("variants_product_idx").on(t.productId),
     check("variants_stock_not_negative", sql`${t.stock} >= 0`),
   ],
-);
+).enableRLS();
 
 export const stockReason = pgEnum("stock_reason", [
   "opening",
@@ -128,7 +132,7 @@ export const stockMovements = pgTable(
     createdAt: createdAt(),
   },
   (t) => [index("stock_movements_variant_idx").on(t.variantId, t.createdAt)],
-);
+).enableRLS();
 
 /* ---------- Customers & orders ---------- */
 
@@ -145,7 +149,7 @@ export const customers = pgTable(
     createdAt: createdAt(),
   },
   (t) => [index("customers_phone_idx").on(t.phone)],
-);
+).enableRLS();
 
 export const orderStatus = pgEnum("order_status", [
   "new",
@@ -188,7 +192,7 @@ export const orders = pgTable(
     index("orders_customer_idx").on(t.customerId),
     index("orders_status_idx").on(t.status),
   ],
-);
+).enableRLS();
 
 export const orderItems = pgTable(
   "order_items",
@@ -204,7 +208,7 @@ export const orderItems = pgTable(
     unitPrice: money("unit_price").notNull(),
   },
   (t) => [index("order_items_order_idx").on(t.orderId)],
-);
+).enableRLS();
 
 /* ---------- Chats (inbox) ---------- */
 
@@ -243,7 +247,7 @@ export const conversations = pgTable(
     ),
     index("conversations_last_idx").on(t.lastMessageAt),
   ],
-);
+).enableRLS();
 
 export const messageDirection = pgEnum("message_direction", ["in", "out"]);
 export const messageStatus = pgEnum("message_status", [
@@ -273,7 +277,7 @@ export const messages = pgTable(
     createdAt: createdAt(),
   },
   (t) => [index("messages_conversation_idx").on(t.conversationId, t.createdAt)],
-);
+).enableRLS();
 
 // Saved replies the team can insert with one click.
 export const quickReplies = pgTable("quick_replies", {
@@ -281,7 +285,7 @@ export const quickReplies = pgTable("quick_replies", {
   title: text("title").notNull(),
   body: text("body").notNull(),
   createdAt: createdAt(),
-});
+}).enableRLS();
 
 // Auto-replies: when a customer message contains the keyword, send the reply.
 export const autoReplies = pgTable("auto_replies", {
@@ -290,7 +294,7 @@ export const autoReplies = pgTable("auto_replies", {
   reply: text("reply").notNull(),
   active: boolean("active").notNull().default(true),
   createdAt: createdAt(),
-});
+}).enableRLS();
 
 /* ---------- Relations ---------- */
 
