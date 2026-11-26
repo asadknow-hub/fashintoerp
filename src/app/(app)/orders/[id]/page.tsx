@@ -57,7 +57,7 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
   const closed = order.status === "cancelled" || order.status === "returned";
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-3">
       <div>
         <Link href="/orders" className="text-sm text-stone-500 hover:underline">
           ← Orders
@@ -69,8 +69,8 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
         <p className="text-sm text-stone-500">{formatDateTime(order.createdAt, timezone)}</p>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[1fr_20rem]">
-        <div className="space-y-6">
+      <div className="grid gap-3 lg:grid-cols-[1fr_20rem]">
+        <div className="space-y-3">
           <section className="card">
             <table className="w-full">
               <thead className="border-b border-stone-200">
@@ -106,7 +106,7 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
                 ))}
               </tbody>
             </table>
-            <dl className="space-y-1 border-t border-stone-200 px-4 py-3 text-sm">
+            <dl className="space-y-1 border-t border-stone-200 px-3 py-1.5 text-sm">
               <Line label="Subtotal" value={formatMoney(subtotal, currency)} />
               <Line label="Delivery" value={formatMoney(order.shippingFee, currency)} />
               {Number(order.discount) > 0 && (
@@ -119,9 +119,9 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
           <ActionForm
             action={updateOrder.bind(null, order.id)}
             submit="Save"
-            className="card space-y-4 p-5"
+            className="card space-y-3 p-3"
           >
-            <h2 className="text-sm font-semibold">Update order</h2>
+            <h2 className="text-[11px] font-bold tracking-wider text-stone-700 uppercase">Update order</h2>
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="Status">
                 <select
@@ -152,8 +152,8 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
           </ActionForm>
         </div>
 
-        <aside className="card h-fit space-y-3 p-5 text-sm">
-          <h2 className="font-semibold">Customer</h2>
+        <aside className="card h-fit space-y-2 p-3 text-sm">
+          <h2 className="text-[11px] font-bold tracking-wider text-stone-700 uppercase">Customer</h2>
           <p>
             {customer.name}
             {customer.phone && <span className="block text-stone-600">{customer.phone}</span>}

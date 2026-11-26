@@ -1,5 +1,6 @@
 import { asc, eq } from "drizzle-orm";
 import Link from "next/link";
+import { FreshOnVisit } from "@/components/fresh-on-visit";
 import { PageHeader } from "@/components/ui";
 import { db } from "@/db";
 import { products, variants } from "@/db/schema";
@@ -31,24 +32,29 @@ export default async function NewOrderPage({
     .orderBy(asc(products.name), asc(variants.color), asc(variants.createdAt));
 
   return (
-    <div className="max-w-3xl">
+    <div>
       <PageHeader title="New order" />
-      <OrderForm
-        currency={(await getPrefs()).currency}
-        sellables={rows.map((row) => ({
-          id: row.id,
-          label: `${row.name} · ${variantLabel(row)}`,
-          price: Number(row.price),
-          stock: row.stock,
-        }))}
-        defaults={{
-          name: param("name"),
-          phone: param("phone"),
-          conversationId: param("conversation"),
-          source: param("source"),
-        }}
-      />
-      <Link href="/orders" className="mt-4 inline-block text-sm text-stone-600 hover:underline">
+      <FreshOnVisit>
+        <OrderForm
+          currency={(await getPrefs()).currency}
+          sellables={rows.map((row) => ({
+            id: row.id,
+            label: `${row.name} · ${variantLabel(row)}`,
+            price: Number(row.price),
+            stock: row.stock,
+          }))}
+          defaults={{
+            name: param("name"),
+            phone: param("phone"),
+            conversationId: param("conversation"),
+            source: param("source"),
+          }}
+        />
+      </FreshOnVisit>
+      <Link
+        href="/orders"
+        className="mt-4 inline-block text-sm text-stone-600 hover:underline"
+      >
         ← Back to orders
       </Link>
     </div>

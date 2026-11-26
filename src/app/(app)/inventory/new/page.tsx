@@ -1,3 +1,4 @@
+import { FreshOnVisit } from "@/components/fresh-on-visit";
 import { PageHeader } from "@/components/ui";
 import { requireUser } from "@/lib/auth";
 import { mediaMode, mediaOffReason } from "@/lib/media";
@@ -11,7 +12,9 @@ export default async function NewProductPage() {
         title="Add product"
         subtitle="Add its photos, pick the sizes and colors, and type the stock into the grid."
       />
-      <ProductCreator mode={mediaMode()} offReason={mediaOffReason()} />
+      <FreshOnVisit>
+        <ProductCreator mode={mediaMode()} offReason={mediaOffReason()} />
+      </FreshOnVisit>
     </>
   );
 }

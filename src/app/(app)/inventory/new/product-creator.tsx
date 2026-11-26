@@ -1,7 +1,7 @@
 "use client";
 
-import Link from "next/link";
-import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { useEffect, useState, useSyncExternalStore, useTransition } from "react";
 import { MediaManager, type MediaItem } from "@/components/media-manager";
 import { Block, Field } from "@/components/ui";
 import { sortSizes } from "@/lib/format";
@@ -44,7 +44,7 @@ function ChipInput({
   return (
     <div>
       <span className="label">{label}</span>
-      <div className="flex min-h-10 flex-wrap items-center gap-1.5 rounded-lg border border-stone-300 bg-white px-2 py-1.5 focus-within:border-stone-900 focus-within:ring-1 focus-within:ring-stone-900">
+      <div className="flex min-h-9 flex-wrap items-center gap-1 rounded-md border border-stone-300 bg-white px-1.5 py-1 focus-within:border-stone-900 focus-within:ring-1 focus-within:ring-stone-900">
         {values.map((value) => (
           <span
             key={value}
@@ -80,7 +80,7 @@ function ChipInput({
           className="min-w-24 flex-1 bg-transparent py-0.5 text-sm outline-none placeholder:text-stone-400"
         />
       </div>
-      <div className="mt-1.5 flex flex-wrap items-center gap-1 text-xs text-stone-500">
+      <div className="mt-1 flex flex-wrap items-center gap-1 text-xs text-stone-500">
         Quick add:
         {ideas.map((idea) => (
           <button
@@ -100,33 +100,93 @@ function ChipInput({
 
 const cellKey = (color: string | null, size: string | null) => JSON.stringify([color, size]);
 
-export function ProductCreator({
-  mode,
-  offReason,
-}: {
-  mode: MediaMode;
-  offReason: string | null;
-}) {
-  const [name, setName] = useState("");
-  const [category, setCategory] = useState("");
-  const [description, setDescription] = useState("");
-  const [sizes, setSizes] = useState<string[]>([]);
-  const [colors, setColors] = useState<string[]>([]);
-  const [stock, setStock] = useState<Record<string, string>>({});
+/* ---------- Draft: what has been typed survives a refresh ---------- */
+
+const DRAFT_KEY = "fashinto:new-product";
+
+type Draft = {
+  name: string;
+  category: string;
+  description: string;
+  sizes: string[];
+  colors: string[];
+  stock: Record<string, string>;
+  price: string;
+  cost: string;
+  lowStockAt: string;
+  media: MediaItem[];
+};
+
+const EMPTY: Draft = {
+  name: "",
+  category: "",
+  description: "",
+  sizes: [],
+  colors: [],
+  stock: {},
+  price: "",
+  cost: "",
+  lowStockAt: "5",
+  media: [],
+};
+
+function readDraft(): Draft | null {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(DRAFT_KEY) ?? "null");
+    if (!saved || typeof saved !== "object") return null;
+    const draft = { ...EMPTY, ...saved } as Draft;
+    if (!Array.isArray(draft.sizes) || !Array.isArray(draft.colors)) return null;
+    if (!Array.isArray(draft.media)) return null;
+    return draft;
+  } catch {
+    return null;
+  }
+}
+
+function writeDraft(draft: Draft | null) {
+  try {
+    if (draft) window.localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+    else window.localStorage.removeItem(DRAFT_KEY);
+  } catch {
+    // Storage can be blocked (private windows); the form still works without it.
+  }
+}
+
+const started = (draft: Draft) =>
+  !!(draft.name || draft.category || draft.sizes.length || draft.colors.length || draft.media.length);
+
+const never = () => () => {};
+
+// The draft lives in the browser, so the editor is only drawn there.
+export function ProductCreator(props: { mode: MediaMode; offReason: string | null }) {
+  const inBrowser = useSyncExternalStore(
+    never,
+    () => true,
+    () => false,
+  );
+  return inBrowser ? <Editor {...props} /> : <div className="card h-96 animate-pulse" />;
+}
+
+function Editor({ mode, offReason }: { mode: MediaMode; offReason: string | null }) {
+  const router = useRouter();
+  const [form, setForm] = useState<Draft>(() => readDraft() ?? EMPTY);
+  const [restored, setRestored] = useState(() => started(form));
   const [fill, setFill] = useState("");
-  const [price, setPrice] = useState("");
-  const [cost, setCost] = useState("");
-  const [lowStockAt, setLowStockAt] = useState("5");
-  const [media, setMedia] = useState<MediaItem[]>([]);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, startTransition] = useTransition();
+  const set = (change: Partial<Draft>) => setForm((current) => ({ ...current, ...change }));
+
+  // Keep a copy of everything typed, so a refresh doesn't lose it.
+  useEffect(() => {
+    writeDraft(started(form) ? form : null);
+  }, [form]);
 
   // With no sizes (or colors) the product still has one column (or row).
-  const columns: (string | null)[] = sizes.length ? sortSizes(sizes) : [null];
-  const rows: (string | null)[] = colors.length ? colors : [null];
+  const columns: (string | null)[] = form.sizes.length ? sortSizes(form.sizes) : [null];
+  const rows: (string | null)[] = form.colors.length ? form.colors : [null];
   const amountAt = (color: string | null, size: string | null) => {
-    const n = Number(stock[cellKey(color, size)] ?? "");
+    const n = Number(form.stock[cellKey(color, size)] ?? "");
     return Number.isInteger(n) && n >= 0 ? n : 0;
   };
   const rowTotal = (color: string | null) =>
@@ -134,10 +194,20 @@ export function ProductCreator({
   const columnTotal = (size: string | null) =>
     rows.reduce((sum, color) => sum + amountAt(color, size), 0);
   const total = rows.reduce((sum, color) => sum + rowTotal(color), 0);
+  const count = rows.length * columns.length;
+
+  const startOver = async () => {
+    const files = form.media;
+    setForm(EMPTY);
+    setRestored(false);
+    setError(null);
+    writeDraft(null);
+    await Promise.all(files.map((item) => discardUpload(item.url, item.thumbUrl)));
+  };
 
   const save = () => {
-    if (!name.trim()) return setError("Give the product a name.");
-    const bad = Object.values(stock).some((value) => {
+    if (!form.name.trim()) return setError("Give the product a name.");
+    const bad = Object.values(form.stock).some((value) => {
       const n = Number(value.trim() || "0");
       return !Number.isInteger(n) || n < 0;
     });
@@ -145,69 +215,88 @@ export function ProductCreator({
     setError(null);
     startTransition(async () => {
       const result = await createProduct({
-        name,
-        category,
-        description,
-        price,
-        cost,
-        lowStockAt,
+        name: form.name,
+        category: form.category,
+        description: form.description,
+        price: form.price,
+        cost: form.cost,
+        lowStockAt: form.lowStockAt,
         variants: rows.flatMap((color) =>
           columns.map((size) => ({ size, color, stock: amountAt(color, size) })),
         ),
-        media: media.map(({ url, kind, tag, fileName }) => ({ url, kind, tag, fileName })),
+        media: form.media.map(({ url, thumbUrl, kind, tag, fileName }) => ({
+          url,
+          thumbUrl,
+          kind,
+          tag,
+          fileName,
+        })),
       });
-      // On success the page moves to the new product, so only errors land here.
-      if (result?.error) setError(result.error);
+      if ("error" in result) return setError(result.error);
+      // Saved: clear the form and its draft, then open the new product.
+      setForm(EMPTY);
+      setRestored(false);
+      writeDraft(null);
+      router.push(`/inventory/${result.id}`);
     });
   };
 
   return (
-    <div className="space-y-4">
-      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_21rem]">
-        <div className="min-w-0 space-y-4">
+    <div className="space-y-3">
+      {restored && (
+        <p className="card flex flex-wrap items-center gap-2 border-amber-300 bg-amber-50 px-3 py-1.5 text-xs text-amber-900">
+          You have an unsaved product from before. It&apos;s all still here.
+          <button type="button" onClick={startOver} className="cursor-pointer font-semibold underline">
+            Start over instead
+          </button>
+        </p>
+      )}
+
+      <div className="grid items-start gap-3 lg:grid-cols-[minmax(0,1fr)_19rem] 2xl:grid-cols-[19rem_minmax(0,1fr)_19rem]">
+        <div className="min-w-0 space-y-3 lg:col-start-1 lg:row-span-2 lg:row-start-1 2xl:col-start-2 2xl:row-span-1">
           <Block title="Product">
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Product name" className="sm:col-span-2">
+            <div className="grid gap-2 sm:grid-cols-[2fr_1fr]">
+              <Field label="Product name">
                 <input
-                  value={name}
-                  onChange={(event) => setName(event.target.value)}
+                  value={form.name}
+                  onChange={(event) => set({ name: event.target.value })}
                   placeholder="Linen Shirt"
-                  className="input py-1.5"
+                  className="input"
                 />
               </Field>
               <Field label="Category (optional)">
                 <input
-                  value={category}
-                  onChange={(event) => setCategory(event.target.value)}
+                  value={form.category}
+                  onChange={(event) => set({ category: event.target.value })}
                   placeholder="Shirts"
-                  className="input py-1.5"
+                  className="input"
                 />
               </Field>
-              <Field label="Description (optional)">
+              <Field label="Description (optional)" className="sm:col-span-2">
                 <input
-                  value={description}
-                  onChange={(event) => setDescription(event.target.value)}
-                  className="input py-1.5"
+                  value={form.description}
+                  onChange={(event) => set({ description: event.target.value })}
+                  className="input"
                 />
               </Field>
             </div>
           </Block>
 
           <Block title="Sizes & colors">
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-3 sm:grid-cols-2">
               <ChipInput
                 label="Sizes"
                 placeholder="Type a size, press Enter"
-                values={sizes}
+                values={form.sizes}
                 ideas={SIZE_IDEAS}
-                onChange={(next) => setSizes(sortSizes(next))}
+                onChange={(next) => set({ sizes: sortSizes(next) })}
               />
               <ChipInput
                 label="Colors"
                 placeholder="Type a color, press Enter"
-                values={colors}
+                values={form.colors}
                 ideas={COLOR_IDEAS}
-                onChange={setColors}
+                onChange={(next) => set({ colors: next })}
               />
             </div>
           </Block>
@@ -223,19 +312,19 @@ export function ProductCreator({
                   inputMode="numeric"
                   placeholder="0"
                   aria-label="Stock for every box"
-                  className="input w-16 px-2 py-1 text-center text-xs"
+                  className="input w-14 px-2 py-0.5 text-center text-xs"
                 />
                 <button
                   type="button"
                   className="btn-secondary btn-sm"
                   onClick={() =>
-                    setStock(
-                      Object.fromEntries(
+                    set({
+                      stock: Object.fromEntries(
                         rows.flatMap((color) =>
                           columns.map((size) => [cellKey(color, size), fill.trim()]),
                         ),
                       ),
-                    )
+                    })
                   }
                 >
                   Fill all
@@ -246,19 +335,19 @@ export function ProductCreator({
             <div className="overflow-x-auto">
               <table className="w-full border-collapse text-sm tabular-nums">
                 <thead>
-                  <tr className="border-b border-stone-200 text-xs text-stone-500">
-                    <th className="w-36 px-4 py-2 text-left font-medium whitespace-nowrap">
+                  <tr className="border-b border-stone-300 text-xs text-stone-500">
+                    <th className="w-32 px-3 py-1.5 text-left font-medium whitespace-nowrap">
                       Color ↓ / Size →
                     </th>
                     {columns.map((size) => (
                       <th
                         key={size ?? "-"}
-                        className="min-w-16 px-2 py-2 text-center font-semibold text-stone-800"
+                        className="min-w-14 px-2 py-1.5 text-center font-semibold text-stone-800"
                       >
                         {size ?? "One size"}
                       </th>
                     ))}
-                    <th className="w-20 border-l border-stone-200 bg-stone-50 px-3 py-2 text-right font-medium">
+                    <th className="w-20 border-l border-stone-300 bg-stone-50 px-3 py-1.5 text-right font-medium">
                       Total
                     </th>
                   </tr>
@@ -266,27 +355,26 @@ export function ProductCreator({
                 <tbody>
                   {rows.map((color) => (
                     <tr key={color ?? "-"} className="border-b border-stone-100">
-                      <th className="px-4 py-1.5 text-left font-semibold whitespace-nowrap">
+                      <th className="px-3 py-1 text-left font-semibold whitespace-nowrap">
                         {color ?? "—"}
                       </th>
                       {columns.map((size) => (
-                        <td key={size ?? "-"} className="px-1 py-1 text-center">
+                        <td key={size ?? "-"} className="px-1 py-0.5 text-center">
                           <input
                             inputMode="numeric"
                             aria-label={`${color ?? ""} ${size ?? ""}`.trim() || "Stock"}
                             placeholder="0"
-                            value={stock[cellKey(color, size)] ?? ""}
+                            value={form.stock[cellKey(color, size)] ?? ""}
                             onChange={(event) =>
-                              setStock((current) => ({
-                                ...current,
-                                [cellKey(color, size)]: event.target.value,
-                              }))
+                              set({
+                                stock: { ...form.stock, [cellKey(color, size)]: event.target.value },
+                              })
                             }
-                            className="input mx-auto w-16 px-1 py-1 text-center"
+                            className="input mx-auto w-14 px-1 py-0.5 text-center"
                           />
                         </td>
                       ))}
-                      <td className="border-l border-stone-200 bg-stone-50 px-3 py-2 text-right font-semibold">
+                      <td className="border-l border-stone-300 bg-stone-50 px-3 py-1.5 text-right font-semibold">
                         {rowTotal(color)}
                       </td>
                     </tr>
@@ -294,13 +382,13 @@ export function ProductCreator({
                 </tbody>
                 <tfoot>
                   <tr className="bg-stone-50 font-semibold">
-                    <th className="px-4 py-2 text-left">Total</th>
+                    <th className="px-3 py-1.5 text-left">Total</th>
                     {columns.map((size) => (
-                      <td key={size ?? "-"} className="px-2 py-2 text-center">
+                      <td key={size ?? "-"} className="px-2 py-1.5 text-center">
                         {columnTotal(size)}
                       </td>
                     ))}
-                    <td className="border-l border-stone-200 bg-stone-900 px-3 py-2 text-right text-white">
+                    <td className="border-l border-stone-300 bg-stone-900 px-3 py-1.5 text-right text-white">
                       {total}
                     </td>
                   </tr>
@@ -308,84 +396,115 @@ export function ProductCreator({
               </table>
             </div>
           </Block>
-
-          <Block title="Price">
-            <div className="grid grid-cols-3 gap-3">
-              <Field label="Selling price">
-                <input
-                  value={price}
-                  onChange={(event) => setPrice(event.target.value)}
-                  inputMode="decimal"
-                  className="input py-1.5"
-                />
-              </Field>
-              <Field label="Your cost">
-                <input
-                  value={cost}
-                  onChange={(event) => setCost(event.target.value)}
-                  inputMode="decimal"
-                  className="input py-1.5"
-                />
-              </Field>
-              <Field label="Low stock alert">
-                <input
-                  value={lowStockAt}
-                  onChange={(event) => setLowStockAt(event.target.value)}
-                  inputMode="numeric"
-                  className="input py-1.5"
-                />
-              </Field>
-            </div>
-            <p className="mt-2 text-xs text-stone-500">
-              Every size and color starts with this price. You can set different
-              prices for each one after saving.
-            </p>
-          </Block>
         </div>
 
-        <div className="min-w-0">
+        <div className="min-w-0 lg:col-start-2 lg:row-start-1 2xl:col-start-1">
           <MediaManager
             mode={mode}
             offReason={offReason}
             folder="products/new"
-            items={media}
+            items={form.media}
             onBusy={setUploading}
             onAdd={async (item) => {
-              setMedia((current) => [...current, { ...item, id: item.url }]);
+              setForm((current) => ({
+                ...current,
+                media: [...current.media, { ...item, id: item.url }],
+              }));
               return null;
             }}
             onTag={async (id, tag) => {
-              setMedia((current) =>
-                current.map((item) => (item.id === id ? { ...item, tag } : item)),
-              );
+              setForm((current) => ({
+                ...current,
+                media: current.media.map((item) => (item.id === id ? { ...item, tag } : item)),
+              }));
               return null;
             }}
             onRemove={async (id) => {
-              setMedia((current) => current.filter((item) => item.id !== id));
-              return (await discardUpload(id))?.error;
+              const gone = form.media.find((item) => item.id === id);
+              setForm((current) => ({
+                ...current,
+                media: current.media.filter((item) => item.id !== id),
+              }));
+              return gone ? (await discardUpload(gone.url, gone.thumbUrl))?.error : null;
             }}
           />
         </div>
-      </div>
 
-      <div className="card sticky bottom-3 z-10 flex flex-wrap items-center gap-3 px-4 py-3 shadow-sm">
-        <p className="text-sm text-stone-600">
-          {rows.length * columns.length} {rows.length * columns.length === 1 ? "item" : "items"} ·{" "}
-          {total} units · {media.length} {media.length === 1 ? "file" : "files"}
-        </p>
-        {error && (
-          <p role="alert" className="text-sm text-rose-700">
-            {error}
-          </p>
-        )}
-        <span className="ml-auto flex items-center gap-3">
-          <Link href="/inventory" className="text-sm text-stone-600 hover:underline">
-            Cancel
-          </Link>
-          <button type="button" onClick={save} disabled={saving || uploading} className="btn">
-            {saving ? "Saving…" : uploading ? "Uploading…" : "Save product"}
-          </button>
-        </span>
+        <div className="min-w-0 space-y-3 lg:col-start-2 lg:row-start-2 2xl:col-start-3 2xl:row-start-1">
+          <Block title="Price">
+            <div className="grid grid-cols-3 gap-2">
+              <Field label="Selling price">
+                <input
+                  value={form.price}
+                  onChange={(event) => set({ price: event.target.value })}
+                  inputMode="decimal"
+                  className="input"
+                />
+              </Field>
+              <Field label="Your cost">
+                <input
+                  value={form.cost}
+                  onChange={(event) => set({ cost: event.target.value })}
+                  inputMode="decimal"
+                  className="input"
+                />
+              </Field>
+              <Field label="Alert at">
+                <input
+                  value={form.lowStockAt}
+                  onChange={(event) => set({ lowStockAt: event.target.value })}
+                  inputMode="numeric"
+                  className="input"
+                />
+              </Field>
+            </div>
+            <p className="mt-1.5 text-[11px] leading-snug text-stone-500">
+              Every size and color starts with this price. You can set different
+              prices for each one after saving.
+            </p>
+          </Block>
+
+          <Block title="Save">
+            <dl className="grid grid-cols-3 gap-px overflow-hidden rounded border border-stone-300 bg-stone-300 text-center">
+              {[
+                ["Items", count],
+                ["Units", total],
+                ["Files", form.media.length],
+              ].map(([label, value]) => (
+                <div key={label} className="bg-white py-1">
+                  <dt className="text-[11px] text-stone-500">{label}</dt>
+                  <dd className="text-sm font-semibold tabular-nums">{value}</dd>
+                </div>
+              ))}
+            </dl>
+            {error && (
+              <p role="alert" className="mt-2 text-xs text-rose-700">
+                {error}
+              </p>
+            )}
+            <div className="mt-2 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={save}
+                disabled={saving || uploading}
+                className="btn flex-1"
+              >
+                {saving ? "Saving…" : uploading ? "Uploading…" : "Save product"}
+              </button>
+              <button
+                type="button"
+                disabled={saving}
+                onClick={async () => {
+                  await startOver();
+                  router.push("/inventory");
+                }}
+                className="btn-secondary"
+              >
+                Cancel
+              </button>
+            </div>
+          </Block>
+        </div>
       </div>
     </div>
   );

@@ -2,7 +2,6 @@
 
 import { eq, like } from "drizzle-orm";
 import { refresh } from "next/cache";
-import { redirect } from "next/navigation";
 import type { ActionState } from "@/components/action-form";
 import { db } from "@/db";
 import { productMedia, products, variants } from "@/db/schema";
@@ -60,8 +59,18 @@ export type NewProduct = {
   lowStockAt: string;
   // One entry per size and color combination, with its opening stock.
   variants: { size: string | null; color: string | null; stock: number }[];
-  media: { url: string; kind: "image" | "video"; tag: string; fileName: string | null }[];
+  media: {
+    url: string;
+    thumbUrl: string | null;
+    kind: "image" | "video";
+    tag: string;
+    fileName: string | null;
+  }[];
 };
+
+// A preview picture is optional, but when given it must be one of our files.
+const validThumb = (value: unknown) =>
+  value === null || value === undefined || (typeof value === "string" && isOurUrl(value));
 
 const label = (value: unknown) => {
   const cleaned = typeof value === "string" ? value.trim().replace(/\s+/g, " ") : "";
@@ -76,7 +85,9 @@ const money = (value: unknown) => {
 };
 
 // Called by the "Add product" screen with everything typed there.
-export async function createProduct(input: NewProduct): Promise<ActionState> {
+export async function createProduct(
+  input: NewProduct,
+): Promise<{ error: string } | { id: string }> {
   const user = await requireUser();
   const name = typeof input?.name === "string" ? input.name.trim().slice(0, 120) : "";
   const price = money(input?.price);
@@ -109,7 +120,7 @@ export async function createProduct(input: NewProduct): Promise<ActionState> {
 
   const media = Array.isArray(input?.media) ? input.media.slice(0, 40) : [];
   for (const item of media) {
-    if (typeof item?.url !== "string" || !isOurUrl(item.url)) {
+    if (typeof item?.url !== "string" || !isOurUrl(item.url) || !validThumb(item.thumbUrl)) {
       return { error: "One of the files did not come from our storage." };
     }
     if (item.kind !== "image" && item.kind !== "video") return { error: "Unknown file type." };
@@ -133,7 +144,10 @@ export async function createProduct(input: NewProduct): Promise<ActionState> {
         description: String(input.description ?? "").trim().slice(0, 2000) || null,
       })
       .returning({ id: products.id });
-    for (const row of rows) {
+    // Each item gets a slightly later time, so colors and sizes stay in the
+    // order they were entered.
+    const startedAt = Date.now();
+    for (const [index, row] of rows.entries()) {
       const [variant] = await tx
         .insert(variants)
         .values({
@@ -144,6 +158,7 @@ export async function createProduct(input: NewProduct): Promise<ActionState> {
           price,
           cost,
           lowStockAt,
+          createdAt: new Date(startedAt + index),
         })
         .returning({ id: variants.id });
       await changeStock(tx, {
@@ -159,6 +174,7 @@ export async function createProduct(input: NewProduct): Promise<ActionState> {
           productId: product.id,
           kind: item.kind,
           url: item.url,
+          thumbUrl: item.thumbUrl ?? null,
           tag: cleanTag(String(item.tag ?? "")) || "Gallery",
           fileName: String(item.fileName ?? "").slice(0, 200) || null,
         })),
@@ -167,21 +183,26 @@ export async function createProduct(input: NewProduct): Promise<ActionState> {
     return product.id;
   });
 
-  redirect(`/inventory/${productId}`);
+  return { id: productId };
 }
 
 // Removes a file that was uploaded on the "Add product" screen and then
 // taken off again before saving. Files already attached to a product are
 // left alone.
-export async function discardUpload(url: string): Promise<ActionState> {
+export async function discardUpload(url: string, thumbUrl?: string | null): Promise<ActionState> {
   await requireUser();
-  if (typeof url !== "string" || !isOurUrl(url)) return { error: "Unknown file." };
+  if (typeof url !== "string" || !isOurUrl(url) || !validThumb(thumbUrl)) {
+    return { error: "Unknown file." };
+  }
   const [attached] = await db
     .select({ id: productMedia.id })
     .from(productMedia)
     .where(eq(productMedia.url, url))
     .limit(1);
-  if (!attached) await removeFile(url);
+  if (!attached) {
+    await removeFile(url);
+    if (thumbUrl) await removeFile(thumbUrl);
+  }
   return null;
 }
 
@@ -399,6 +420,7 @@ export async function adjustStockGrid(
 export async function addMedia(input: {
   productId: string;
   url: string;
+  thumbUrl: string | null;
   kind: "image" | "video";
   tag: string;
   fileName: string | null;
@@ -408,7 +430,7 @@ export async function addMedia(input: {
   if (!isUuid(String(input.productId))) return { error: "Product not found." };
   if (input.kind !== "image" && input.kind !== "video") return { error: "Unknown file type." };
   if (!tag) return { error: "Choose a tag." };
-  if (typeof input.url !== "string" || !isOurUrl(input.url)) {
+  if (typeof input.url !== "string" || !isOurUrl(input.url) || !validThumb(input.thumbUrl)) {
     return { error: "That file did not come from our storage." };
   }
 
@@ -422,6 +444,7 @@ export async function addMedia(input: {
     productId: product.id,
     kind: input.kind,
     url: input.url,
+    thumbUrl: input.thumbUrl ?? null,
     tag,
     fileName: String(input.fileName ?? "").slice(0, 200) || null,
   });
@@ -444,8 +467,11 @@ export async function deleteMedia(mediaId: string): Promise<ActionState> {
   const [removed] = await db
     .delete(productMedia)
     .where(eq(productMedia.id, mediaId))
-    .returning({ url: productMedia.url });
-  if (removed) await removeFile(removed.url);
+    .returning({ url: productMedia.url, thumbUrl: productMedia.thumbUrl });
+  if (removed) {
+    await removeFile(removed.url);
+    if (removed.thumbUrl) await removeFile(removed.thumbUrl);
+  }
   refresh();
   return { ok: "Deleted." };
 }

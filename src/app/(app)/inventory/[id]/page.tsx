@@ -1,4 +1,4 @@
-import { asc, desc, eq, inArray } from "drizzle-orm";
+import { asc, desc, eq } from "drizzle-orm";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ActionForm } from "@/components/action-form";
@@ -18,6 +18,7 @@ import {
 } from "../actions";
 import { MediaBlock } from "./media-block";
 import { StockGrid } from "./stock-grid";
+import { SubmitButton } from "@/components/submit-button";
 
 const reasonLabel = {
   opening: "Opening stock",
@@ -36,11 +37,10 @@ export default async function ProductPage({
   const { id } = await params;
   if (!isUuid(id)) notFound();
 
-  const [product] = await db.select().from(products).where(eq(products.id, id));
-  if (!product) notFound();
-
-  const { currency, timezone } = await getPrefs();
-  const [rows, media] = await Promise.all([
+  // Everything this page needs, fetched at the same time.
+  const [[product], { currency, timezone }, rows, media, history] = await Promise.all([
+    db.select().from(products).where(eq(products.id, id)),
+    getPrefs(),
     db
       .select()
       .from(variants)
@@ -51,13 +51,31 @@ export default async function ProductPage({
         id: productMedia.id,
         kind: productMedia.kind,
         url: productMedia.url,
+        thumbUrl: productMedia.thumbUrl,
         tag: productMedia.tag,
         fileName: productMedia.fileName,
       })
       .from(productMedia)
       .where(eq(productMedia.productId, id))
       .orderBy(asc(productMedia.createdAt)),
+    db
+      .select({
+        id: stockMovements.id,
+        change: stockMovements.change,
+        reason: stockMovements.reason,
+        note: stockMovements.note,
+        createdAt: stockMovements.createdAt,
+        sku: variants.sku,
+        userName: users.name,
+      })
+      .from(stockMovements)
+      .innerJoin(variants, eq(variants.id, stockMovements.variantId))
+      .leftJoin(users, eq(users.id, stockMovements.userId))
+      .where(eq(variants.productId, id))
+      .orderBy(desc(stockMovements.createdAt))
+      .limit(40),
   ]);
+  if (!product) notFound();
 
   // Colors in the order they were added, sizes in S-M-L order.
   const colors = [...new Set(rows.map((v) => v.color))];
@@ -74,30 +92,6 @@ export default async function ProductPage({
   const out = items.filter((v) => v.stock <= 0).length;
   const low = items.filter((v) => v.stock > 0 && v.stock <= v.lowStockAt).length;
 
-  const history = items.length
-    ? await db
-        .select({
-          id: stockMovements.id,
-          change: stockMovements.change,
-          reason: stockMovements.reason,
-          note: stockMovements.note,
-          createdAt: stockMovements.createdAt,
-          sku: variants.sku,
-          userName: users.name,
-        })
-        .from(stockMovements)
-        .innerJoin(variants, eq(variants.id, stockMovements.variantId))
-        .leftJoin(users, eq(users.id, stockMovements.userId))
-        .where(
-          inArray(
-            stockMovements.variantId,
-            items.map((v) => v.id),
-          ),
-        )
-        .orderBy(desc(stockMovements.createdAt))
-        .limit(40)
-    : [];
-
   const stats = [
     { label: "In stock", value: `${units} units` },
     { label: "Stock value (cost)", value: formatMoney(costValue, currency) },
@@ -110,17 +104,17 @@ export default async function ProductPage({
   ];
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-end justify-between gap-3">
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-end justify-between gap-3 border-b-2 border-stone-900 pb-2">
         <div className="min-w-0">
           <Link href="/inventory" className="text-xs text-stone-500 hover:underline">
             ← Inventory
           </Link>
-          <h1 className="flex items-center gap-2 text-xl font-semibold tracking-tight">
+          <h1 className="flex items-center gap-2 text-xl leading-tight font-bold tracking-tight">
             <span className="truncate">{product.name}</span>
             {product.archived && <Badge>Archived</Badge>}
           </h1>
-          <p className="text-sm text-stone-500">
+          <p className="text-xs text-stone-500">
             {[
               product.category,
               `${colors.length} ${colors.length === 1 ? "color" : "colors"}`,
@@ -131,15 +125,13 @@ export default async function ProductPage({
           </p>
         </div>
         <form action={setArchived.bind(null, product.id, !product.archived)}>
-          <button className="btn-secondary btn-sm">
-            {product.archived ? "Restore product" : "Archive product"}
-          </button>
+          <SubmitButton>{product.archived ? "Restore product" : "Archive product"}</SubmitButton>
         </form>
       </div>
 
-      <dl className="card grid grid-cols-2 gap-px overflow-hidden bg-stone-200 lg:grid-cols-4">
+      <dl className="card grid grid-cols-2 gap-px overflow-hidden bg-stone-300 lg:grid-cols-4">
         {stats.map((stat) => (
-          <div key={stat.label} className="bg-white px-4 py-3">
+          <div key={stat.label} className="bg-white px-3 py-1.5">
             <dt className="text-xs text-stone-500">{stat.label}</dt>
             <dd className={"mt-0.5 text-base font-semibold tabular-nums " + (stat.tone ?? "")}>
               {stat.value}
@@ -148,8 +140,8 @@ export default async function ProductPage({
         ))}
       </dl>
 
-      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_21rem]">
-        <div className="min-w-0 space-y-4">
+      <div className="grid items-start gap-3 lg:grid-cols-[minmax(0,1fr)_19rem] 2xl:grid-cols-[19rem_minmax(0,1fr)_21rem]">
+        <div className="min-w-0 space-y-3 lg:col-start-1 lg:row-span-2 lg:row-start-1 2xl:col-start-2 2xl:row-span-1">
           <StockGrid
             variants={items.map((v) => ({
               id: v.id,
@@ -282,14 +274,16 @@ export default async function ProductPage({
           </Block>
         </div>
 
-        <div className="min-w-0 space-y-4">
+        <div className="min-w-0 lg:col-start-2 lg:row-start-1 2xl:col-start-1">
           <MediaBlock
             productId={product.id}
             items={media}
             mode={mediaMode()}
             offReason={mediaOffReason()}
           />
+        </div>
 
+        <div className="min-w-0 space-y-3 lg:col-start-2 lg:row-start-2 2xl:col-start-3 2xl:row-start-1">
           <Block title="Details">
             <ActionForm
               action={updateProduct.bind(null, product.id)}
@@ -319,12 +313,12 @@ export default async function ProductPage({
           </Block>
 
           <Block title="Stock history" flush>
-            <div className="max-h-80 divide-y divide-stone-100 overflow-y-auto">
+            <div className="max-h-96 divide-y divide-stone-100 overflow-y-auto">
               {history.length === 0 && (
                 <p className="p-4 text-sm text-stone-500">No stock changes yet.</p>
               )}
               {history.map((h) => (
-                <div key={h.id} className="flex items-start gap-2 px-4 py-2 text-xs">
+                <div key={h.id} className="flex items-start gap-2 px-3 py-1.5 text-xs">
                   <span
                     className={
                       "w-9 shrink-0 text-sm font-semibold tabular-nums " +

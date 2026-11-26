@@ -1,17 +1,16 @@
 import { and, asc, desc, eq, inArray, lte, notInArray, sql } from "drizzle-orm";
 import Link from "next/link";
-import { Badge, orderStatusTone, stockTone } from "@/components/ui";
+import { Badge, Block, orderStatusTone, PageHeader, stockTone } from "@/components/ui";
 import { db } from "@/db";
 import { conversations, customers, orders, products, variants } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
-import { formatDate, formatMoney, variantLabel } from "@/lib/format";
+import { formatDate, formatDateTime, formatMoney, variantLabel } from "@/lib/format";
 import { getPrefs } from "@/lib/settings";
 
 export default async function DashboardPage() {
-  const user = await requireUser();
-  const { currency, timezone } = await getPrefs();
+  const [user, { currency, timezone }] = await Promise.all([requireUser(), getPrefs()]);
 
-  const [[sales], [toShip], [chats], lowStock, recentOrders] = await Promise.all([
+  const [[sales], [toShip], [chats], lowStock, recentOrders, waiting] = await Promise.all([
     db
       .select({
         total: sql<string>`coalesce(sum(${orders.total}), 0)`,
@@ -61,7 +60,20 @@ export default async function DashboardPage() {
       .from(orders)
       .innerJoin(customers, eq(customers.id, orders.customerId))
       .orderBy(desc(orders.createdAt))
-      .limit(6),
+      .limit(8),
+    db
+      .select({
+        id: conversations.id,
+        name: conversations.contactName,
+        channel: conversations.channel,
+        lastMessage: conversations.lastMessage,
+        lastMessageAt: conversations.lastMessageAt,
+        unread: conversations.unread,
+      })
+      .from(conversations)
+      .where(sql`${conversations.unread} > 0`)
+      .orderBy(desc(conversations.lastMessageAt))
+      .limit(8),
   ]);
 
   const stats = [
@@ -91,79 +103,95 @@ export default async function DashboardPage() {
     },
   ];
 
-  return (
-    <div className="space-y-8">
-      <h1 className="text-xl font-semibold tracking-tight">
-        Hello, {user.name.split(" ")[0]}
-      </h1>
+  const row = "flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-stone-50";
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+  return (
+    <>
+      <PageHeader title={`Hello, ${user.name.split(" ")[0]}`} subtitle="Today at a glance." />
+
+      <div className="card mb-3 grid grid-cols-2 gap-px overflow-hidden bg-stone-300 lg:grid-cols-4">
         {stats.map((stat) => (
-          <Link key={stat.label} href={stat.href} className="card p-4 hover:border-stone-400">
-            <p className="text-xs font-medium text-stone-500">{stat.label}</p>
-            <p className="mt-2 text-2xl font-semibold tabular-nums">{stat.value}</p>
-            <p className="mt-1 text-xs text-stone-500">{stat.note}</p>
+          <Link key={stat.label} href={stat.href} className="bg-white px-3 py-2 hover:bg-stone-50">
+            <p className="text-[11px] font-semibold tracking-wide text-stone-500 uppercase">
+              {stat.label}
+            </p>
+            <p className="text-2xl leading-tight font-bold tabular-nums">{stat.value}</p>
+            <p className="text-xs text-stone-500">{stat.note}</p>
           </Link>
         ))}
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <section className="min-w-0">
-          <h2 className="mb-3 text-sm font-semibold">Recent orders</h2>
-          <div className="card divide-y divide-stone-100">
+      <div className="grid items-start gap-3 lg:grid-cols-3">
+        <Block
+          title="Recent orders"
+          flush
+          aside={
+            <Link href="/orders/new" className="text-xs font-semibold underline">
+              New order
+            </Link>
+          }
+        >
+          <div className="divide-y divide-stone-100">
             {recentOrders.length === 0 && (
-              <p className="p-4 text-sm text-stone-500">
-                No orders yet.{" "}
-                <Link href="/orders/new" className="font-medium text-stone-900 underline">
-                  Create one
-                </Link>
-              </p>
+              <p className="px-3 py-2 text-sm text-stone-500">No orders yet.</p>
             )}
             {recentOrders.map((order) => (
-              <Link
-                key={order.id}
-                href={`/orders/${order.id}`}
-                className="flex items-center gap-3 px-4 py-3 text-sm hover:bg-stone-50"
-              >
-                <span className="font-medium tabular-nums">#{order.number}</span>
+              <Link key={order.id} href={`/orders/${order.id}`} className={row}>
+                <span className="font-semibold tabular-nums">#{order.number}</span>
                 <span className="min-w-0 flex-1 truncate text-stone-600">
                   {order.customer} · {formatDate(order.createdAt, timezone)}
                 </span>
                 <Badge tone={orderStatusTone[order.status]}>{order.status}</Badge>
-                <span className="w-20 text-right tabular-nums">
+                <span className="text-right tabular-nums">
                   {formatMoney(order.total, currency)}
                 </span>
               </Link>
             ))}
           </div>
-        </section>
+        </Block>
 
-        <section className="min-w-0">
-          <h2 className="mb-3 text-sm font-semibold">Running low</h2>
-          <div className="card divide-y divide-stone-100">
+        <Block title="Running low" flush>
+          <div className="divide-y divide-stone-100">
             {lowStock.length === 0 && (
-              <p className="p-4 text-sm text-stone-500">
-                Nothing is running low.
-              </p>
+              <p className="px-3 py-2 text-sm text-stone-500">Nothing is running low.</p>
             )}
             {lowStock.map((item) => (
-              <Link
-                key={item.id}
-                href={`/inventory/${item.productId}`}
-                className="flex items-center gap-3 px-4 py-3 text-sm hover:bg-stone-50"
-              >
+              <Link key={item.id} href={`/inventory/${item.productId}`} className={row}>
                 <span className="min-w-0 flex-1 truncate">
                   <span className="font-medium">{item.name}</span>
                   <span className="text-stone-500"> · {variantLabel(item)}</span>
                 </span>
-                <Badge tone={stockTone(item.stock, item.lowStockAt)}>
-                  {item.stock} left
-                </Badge>
+                <Badge tone={stockTone(item.stock, item.lowStockAt)}>{item.stock} left</Badge>
               </Link>
             ))}
           </div>
-        </section>
+        </Block>
+
+        <Block title="Chats waiting" flush>
+          <div className="divide-y divide-stone-100">
+            {waiting.length === 0 && (
+              <p className="px-3 py-2 text-sm text-stone-500">No one is waiting for a reply.</p>
+            )}
+            {waiting.map((chat) => (
+              <Link key={chat.id} href={`/inbox?c=${chat.id}`} className={row}>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-medium">
+                    {chat.name ?? "Customer"}
+                    <span className="font-normal text-stone-500"> · {chat.channel}</span>
+                  </span>
+                  <span className="block truncate text-xs text-stone-500">{chat.lastMessage}</span>
+                </span>
+                <span className="shrink-0 text-right text-xs text-stone-500">
+                  {formatDateTime(chat.lastMessageAt, timezone)}
+                </span>
+                <span className="rounded-full bg-rose-700 px-1.5 text-xs font-semibold text-white">
+                  {chat.unread}
+                </span>
+              </Link>
+            ))}
+          </div>
+        </Block>
       </div>
-    </div>
+    </>
   );
 }

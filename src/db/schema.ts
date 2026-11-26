@@ -117,6 +117,9 @@ export const productMedia = pgTable(
       .references(() => products.id, { onDelete: "cascade" }),
     kind: mediaKind("kind").notNull(),
     url: text("url").notNull(),
+    // A small picture of the photo, or of one frame of the video, so lists
+    // and galleries load fast. Older files may not have one.
+    thumbUrl: text("thumb_url"),
     tag: text("tag").notNull(),
     fileName: text("file_name"),
     createdAt: createdAt(),

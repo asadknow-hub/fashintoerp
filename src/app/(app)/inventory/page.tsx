@@ -32,11 +32,14 @@ export default async function InventoryPage({
       value: sql<string>`coalesce(sum(${variants.stock} * ${variants.cost}), 0)`,
       colors: sql<number>`count(distinct ${variants.color})::int`,
       sizes: sql<number>`count(distinct ${variants.size})::int`,
-      // The photo tagged "Main photo" if there is one, otherwise the first photo.
+      // The small version of the "Main photo" if there is one, otherwise the
+      // first photo, otherwise a frame from a video.
       photo: sql<string | null>`(
-        select ${productMedia.url} from ${productMedia}
-        where ${productMedia.productId} = ${products.id} and ${productMedia.kind} = 'image'
-        order by (${productMedia.tag} = 'Main photo') desc, ${productMedia.createdAt}
+        select coalesce(${productMedia.thumbUrl}, ${productMedia.url}) from ${productMedia}
+        where ${productMedia.productId} = ${products.id}
+          and (${productMedia.kind} = 'image' or ${productMedia.thumbUrl} is not null)
+        order by (${productMedia.tag} = 'Main photo') desc,
+          (${productMedia.kind} = 'image') desc, ${productMedia.createdAt}
         limit 1
       )`,
       minPrice: sql<string | null>`min(${variants.price})`,
@@ -112,7 +115,7 @@ export default async function InventoryPage({
         action={{ href: "/inventory/new", label: "Add product" }}
       />
 
-      <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+      <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-2">
         <div className="flex gap-1">
           {views.map((v) => (
             <Link key={v.key} href={href({ view: v.key })} className={pill(view === v.key)}>
@@ -149,14 +152,14 @@ export default async function InventoryPage({
         <>
           <dl
             data-totals
-            className="card mb-3 grid grid-cols-3 gap-px overflow-hidden bg-stone-200 text-sm"
+            className="card mb-2 grid grid-cols-3 gap-px overflow-hidden bg-stone-300 text-sm"
           >
             {[
               ["Products", String(rows.length)],
               ["Units in stock", String(units)],
               ["Stock value (cost)", formatMoney(value, currency)],
             ].map(([label, text]) => (
-              <div key={label} className="bg-white px-4 py-2">
+              <div key={label} className="bg-white px-3 py-1.5">
                 <dt className="text-xs text-stone-500">{label}</dt>
                 <dd className="font-semibold tabular-nums">{text}</dd>
               </div>
@@ -164,7 +167,7 @@ export default async function InventoryPage({
           </dl>
 
           {layout === "gallery" ? (
-            <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+            <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-8">
               {rows.map((row) => (
                 <li key={row.id}>
                   <Link
@@ -187,7 +190,7 @@ export default async function InventoryPage({
                       )}
                       <span className="absolute top-2 right-2">{status(row)}</span>
                     </div>
-                    <div className="space-y-0.5 px-3 py-2.5">
+                    <div className="px-2.5 py-2">
                       <p className="truncate text-sm font-medium group-hover:underline">
                         {row.name}
                       </p>

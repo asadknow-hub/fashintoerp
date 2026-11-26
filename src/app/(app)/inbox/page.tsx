@@ -8,6 +8,7 @@ import { formatDateTime, isUuid } from "@/lib/format";
 import { getPrefs } from "@/lib/settings";
 import { reply, setOpen } from "./actions";
 import { AutoRefresh, ReplyBox, ScrollToEnd } from "./reply-box";
+import { SubmitButton } from "@/components/submit-button";
 
 const channelLabel = {
   whatsapp: "WhatsApp",
@@ -121,7 +122,7 @@ export default async function InboxPage({ searchParams }: PageProps<"/inbox">) {
                 key={c.id}
                 href={href(c.id)}
                 className={
-                  "block px-4 py-3 hover:bg-stone-50 " +
+                  "block px-3 py-1.5 hover:bg-stone-50 " +
                   (c.id === selected?.id ? "bg-stone-100" : "")
                 }
               >
@@ -156,7 +157,7 @@ export default async function InboxPage({ searchParams }: PageProps<"/inbox">) {
 
         {selected ? (
           <section className="card flex min-h-[28rem] min-w-0 flex-col">
-            <header className="flex flex-wrap items-center gap-2 border-b border-stone-200 px-4 py-3">
+            <header className="flex flex-wrap items-center gap-2 border-b border-stone-200 px-3 py-1.5">
               <Link href={href()} className="text-sm text-stone-500 lg:hidden">
                 ←
               </Link>
@@ -179,9 +180,7 @@ export default async function InboxPage({ searchParams }: PageProps<"/inbox">) {
                 Create order
               </Link>
               <form action={setOpen.bind(null, selected.id, !selected.open)}>
-                <button className="btn-secondary btn-sm">
-                  {selected.open ? "Close chat" : "Reopen"}
-                </button>
+                <SubmitButton>{selected.open ? "Close chat" : "Reopen"}</SubmitButton>
               </form>
             </header>
 

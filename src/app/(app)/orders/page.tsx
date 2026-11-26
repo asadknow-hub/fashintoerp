@@ -62,7 +62,7 @@ export default async function OrdersPage({ searchParams }: PageProps<"/orders">)
         action={{ href: "/orders/new", label: "New order" }}
       />
 
-      <div className="mb-4 flex flex-wrap items-center gap-3">
+      <div className="mb-2 flex flex-wrap items-center gap-3">
         <div className="flex flex-wrap gap-1">
           {filters.map((f) => (
             <Link

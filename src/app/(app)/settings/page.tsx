@@ -20,11 +20,11 @@ export default async function SettingsPage() {
   return (
     <>
       <PageHeader title="Settings" />
-      <div className="grid gap-8 lg:grid-cols-2">
+      <div className="grid gap-3 lg:grid-cols-2">
         {owner && (
           <section className="space-y-3">
-            <h2 className="text-sm font-semibold">Business</h2>
-            <ActionForm action={updateBusiness} submit="Save" className="card space-y-3 p-4">
+            <h2 className="text-[11px] font-bold tracking-wider text-stone-700 uppercase">Business</h2>
+            <ActionForm action={updateBusiness} submit="Save" className="card space-y-2 p-3">
               <Field label="Business name">
                 <input
                   name="businessName"
@@ -58,8 +58,8 @@ export default async function SettingsPage() {
         )}
 
         <section className="space-y-3">
-          <h2 className="text-sm font-semibold">Your password</h2>
-          <ActionForm action={changePassword} submit="Change password" className="card space-y-3 p-4">
+          <h2 className="text-[11px] font-bold tracking-wider text-stone-700 uppercase">Your password</h2>
+          <ActionForm action={changePassword} submit="Change password" className="card space-y-2 p-3">
             <Field label="Current password">
               <input
                 name="current"
@@ -84,7 +84,7 @@ export default async function SettingsPage() {
 
         {owner && (
           <section className="space-y-3">
-            <h2 className="text-sm font-semibold">Chat channels</h2>
+            <h2 className="text-[11px] font-bold tracking-wider text-stone-700 uppercase">Chat channels</h2>
             <div className="card divide-y divide-stone-100">
               {(
                 [
@@ -93,7 +93,7 @@ export default async function SettingsPage() {
                   ["messenger", "Facebook Messenger"],
                 ] as const
               ).map(([key, label]) => (
-                <div key={key} className="flex items-center justify-between px-4 py-3 text-sm">
+                <div key={key} className="flex items-center justify-between px-3 py-1.5 text-sm">
                   <span>{label}</span>
                   <Badge tone={channels[key] ? "green" : "gray"}>
                     {channels[key] ? "Connected" : "Not connected"}
@@ -101,7 +101,7 @@ export default async function SettingsPage() {
                 </div>
               ))}
             </div>
-            <div className="card space-y-2 p-4 text-sm text-stone-600">
+            <div className="card space-y-2 p-3 text-sm text-stone-600">
               <p>
                 Chats connect through a Meta (Facebook) business account. This is
                 a one-time setup — ask your developer or Claude to do it with you.

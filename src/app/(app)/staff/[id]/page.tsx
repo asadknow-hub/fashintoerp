@@ -28,7 +28,7 @@ export default async function EditStaffPage({ params }: PageProps<"/staff/[id]">
   const self = staff.id === me.id;
 
   return (
-    <div className="max-w-2xl space-y-6">
+    <div className="max-w-2xl space-y-3">
       <div>
         <Link href="/staff" className="text-sm text-stone-500 hover:underline">
           ← Staff
@@ -39,7 +39,7 @@ export default async function EditStaffPage({ params }: PageProps<"/staff/[id]">
       <ActionForm
         action={updateStaff.bind(null, staff.id)}
         submit="Save changes"
-        className="card space-y-4 p-6"
+        className="card space-y-3 p-3"
       >
         <StaffFields staff={staff} self={self} />
       </ActionForm>
@@ -50,9 +50,9 @@ export default async function EditStaffPage({ params }: PageProps<"/staff/[id]">
           submit="Delete staff member"
           submitClassName="btn-secondary text-rose-700"
           confirm={`Delete ${staff.name}? This can't be undone.`}
-          className="card space-y-3 p-6"
+          className="card space-y-2 p-3"
         >
-          <h2 className="text-sm font-semibold">Delete</h2>
+          <h2 className="text-[11px] font-bold tracking-wider text-stone-700 uppercase">Delete</h2>
           <p className="text-sm text-stone-600">
             Removes their login for good. Orders and stock changes they made
             stay, but will no longer show their name. To only stop them signing

@@ -44,7 +44,12 @@ export function OrderForm({
   const total = subtotal + (Number(shippingFee) || 0) - (Number(discount) || 0);
 
   return (
-    <ActionForm action={createOrder} submit="Create order" className="space-y-6">
+    <ActionForm
+      action={createOrder}
+      submit="Create order"
+      className="grid items-start gap-3 lg:grid-cols-[minmax(0,1fr)_24rem]"
+      footerClassName="flex flex-wrap items-center gap-3 lg:col-start-2"
+    >
       <input type="hidden" name="conversationId" value={defaults.conversationId} />
       <input
         type="hidden"
@@ -58,9 +63,9 @@ export function OrderForm({
         )}
       />
 
-      <section className="card space-y-4 p-5">
-        <h2 className="text-sm font-semibold">Customer</h2>
-        <div className="grid gap-4 sm:grid-cols-2">
+      <section className="card space-y-2 p-3 lg:col-start-2 lg:row-start-1">
+        <h2 className="text-[11px] font-bold tracking-wider text-stone-700 uppercase">Customer</h2>
+        <div className="grid grid-cols-2 gap-2">
           <Field label="Name">
             <input name="name" required defaultValue={defaults.name} className="input" />
           </Field>
@@ -76,8 +81,8 @@ export function OrderForm({
         </div>
       </section>
 
-      <section className="card space-y-3 p-5">
-        <h2 className="text-sm font-semibold">Items</h2>
+      <section className="card space-y-2 p-3 lg:col-start-1 lg:row-span-2 lg:row-start-1">
+        <h2 className="text-[11px] font-bold tracking-wider text-stone-700 uppercase">Items</h2>
         {sellables.length === 0 && (
           <p className="text-sm text-stone-500">
             You have no products yet. Add products in Inventory first.
@@ -160,9 +165,9 @@ export function OrderForm({
         </button>
       </section>
 
-      <section className="card space-y-4 p-5">
-        <h2 className="text-sm font-semibold">Payment & delivery</h2>
-        <div className="grid gap-4 sm:grid-cols-4">
+      <section className="card space-y-2 p-3 lg:col-start-2 lg:row-start-2">
+        <h2 className="text-[11px] font-bold tracking-wider text-stone-700 uppercase">Payment & delivery</h2>
+        <div className="grid grid-cols-2 gap-2">
           <Field label="Payment">
             <select name="payment" className="input" defaultValue="cod">
               <option value="cod">Cash on delivery</option>

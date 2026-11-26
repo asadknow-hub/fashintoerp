@@ -10,10 +10,10 @@ export function PageHeader({
   action?: { href: string; label: string };
 }) {
   return (
-    <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+    <div className="mb-3 flex flex-wrap items-end justify-between gap-3 border-b-2 border-stone-900 pb-2">
       <div>
-        <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
-        {subtitle && <p className="mt-0.5 text-sm text-stone-500">{subtitle}</p>}
+        <h1 className="text-xl leading-tight font-bold tracking-tight">{title}</h1>
+        {subtitle && <p className="text-xs text-stone-500">{subtitle}</p>}
       </div>
       {action && (
         <Link href={action.href} className="btn">
@@ -40,11 +40,11 @@ export function Block({
 }) {
   return (
     <section className={"card overflow-hidden " + (className ?? "")}>
-      <header className="flex min-h-11 flex-wrap items-center justify-between gap-2 border-b border-stone-200 bg-stone-50 px-4 py-2">
-        <h2 className="text-sm font-semibold">{title}</h2>
+      <header className="flex min-h-9 flex-wrap items-center justify-between gap-2 border-b border-stone-300 bg-stone-100 px-3 py-1">
+        <h2 className="text-[11px] font-bold tracking-wider text-stone-700 uppercase">{title}</h2>
         {aside}
       </header>
-      <div className={flush ? "" : "p-4"}>{children}</div>
+      <div className={flush ? "" : "p-3"}>{children}</div>
     </section>
   );
 }
@@ -104,7 +104,7 @@ export function Empty({
   children?: React.ReactNode;
 }) {
   return (
-    <div className="card px-6 py-12 text-center">
+    <div className="card px-6 py-8 text-center">
       <p className="font-medium">{title}</p>
       {children && (
         <div className="mx-auto mt-1 max-w-md text-sm text-stone-500">

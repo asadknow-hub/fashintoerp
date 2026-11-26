@@ -113,15 +113,15 @@ export function StockGrid({
         <table className="w-full border-collapse text-sm tabular-nums">
           <thead>
             <tr className="border-b border-stone-200 text-xs text-stone-500">
-              <th className="w-36 px-4 py-2 text-left font-medium whitespace-nowrap">
+              <th className="w-32 px-3 py-1.5 text-left font-medium whitespace-nowrap">
                 Color ↓ / Size →
               </th>
               {sizes.map((size) => (
-                <th key={size ?? "-"} className="min-w-16 px-2 py-2 text-center font-semibold text-stone-800">
+                <th key={size ?? "-"} className="min-w-14 px-2 py-1.5 text-center font-semibold text-stone-800">
                   {size ?? "One size"}
                 </th>
               ))}
-              <th className="w-20 border-l border-stone-200 bg-stone-50 px-3 py-2 text-right font-medium">
+              <th className="w-20 border-l border-stone-300 bg-stone-50 px-3 py-1.5 text-right font-medium">
                 Total
               </th>
             </tr>
@@ -129,7 +129,7 @@ export function StockGrid({
           <tbody>
             {colors.map((color) => (
               <tr key={color ?? "-"} className="border-b border-stone-100">
-                <th className="px-4 py-1.5 text-left font-semibold whitespace-nowrap">
+                <th className="px-3 py-1 text-left font-semibold whitespace-nowrap">
                   {color ?? "—"}
                 </th>
                 {sizes.map((size) => {
@@ -158,7 +158,7 @@ export function StockGrid({
                               ? "Running low"
                               : undefined
                         }
-                        className={"px-2 py-2 text-center " + tone}
+                        className={"border-l border-stone-100 px-2 py-1.5 text-center " + tone}
                       >
                         {v.stock}
                       </td>
@@ -186,7 +186,7 @@ export function StockGrid({
                     </td>
                   );
                 })}
-                <td className="border-l border-stone-200 bg-stone-50 px-3 py-2 text-right font-semibold">
+                <td className="border-l border-stone-300 bg-stone-50 px-3 py-1.5 text-right font-semibold">
                   {sum(variants.filter((v) => v.color === color))}
                 </td>
               </tr>
@@ -194,13 +194,13 @@ export function StockGrid({
           </tbody>
           <tfoot>
             <tr className="bg-stone-50 font-semibold">
-              <th className="px-4 py-2 text-left">Total</th>
+              <th className="px-3 py-1.5 text-left">Total</th>
               {sizes.map((size) => (
-                <td key={size ?? "-"} className="px-2 py-2 text-center">
+                <td key={size ?? "-"} className="px-2 py-1.5 text-center">
                   {sum(variants.filter((v) => v.size === size))}
                 </td>
               ))}
-              <td className="border-l border-stone-200 bg-stone-900 px-3 py-2 text-right text-white">
+              <td className="border-l border-stone-300 bg-stone-900 px-3 py-1.5 text-right text-white">
                 {total}
               </td>
             </tr>
@@ -209,7 +209,7 @@ export function StockGrid({
       </div>
 
       {mode && (
-        <div className="flex flex-wrap items-center gap-2 border-t border-stone-200 px-4 py-3">
+        <div className="flex flex-wrap items-center gap-2 border-t border-stone-300 px-3 py-2">
           <input
             value={note}
             onChange={(event) => setNote(event.target.value)}

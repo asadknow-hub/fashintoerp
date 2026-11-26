@@ -42,7 +42,7 @@ export default async function CustomersPage({
         title="Customers"
         subtitle="Added automatically when you create an order."
       />
-      <form className="mb-4 flex gap-2">
+      <form className="mb-2 flex gap-2">
         <input
           name="q"
           defaultValue={q}
