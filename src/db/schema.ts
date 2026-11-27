@@ -326,6 +326,13 @@ export const orders = pgTable(
     dispatchedAt: timestamp("dispatched_at", { withTimezone: true }),
     deliveredAt: timestamp("delivered_at", { withTimezone: true }),
     deliveryCharge: money("delivery_charge"),
+    // A return: when it was made, and what the customer agreed to pay
+    // towards the delivery cost (empty if they are not covering it).
+    returnedAt: timestamp("returned_at", { withTimezone: true }),
+    returnFee: money("return_fee"),
+    // Set on an order that replaces another one: the order it is an
+    // exchange for.
+    exchangeOfId: uuid("exchange_of_id"),
     shippingFee: money("shipping_fee").notNull().default("0"),
     discount: money("discount").notNull().default("0"),
     total: money("total").notNull().default("0"),

@@ -121,6 +121,9 @@ export async function createOrder(
   const conversationId = text(form, "conversationId");
   const lines = readLines(form);
   const shipperRef = cleanRef(text(form, "shipperRef")) || null;
+  // Set when this order replaces an earlier one (an exchange).
+  const exchangeOf = text(form, "exchangeOf");
+  if (exchangeOf && !isUuid(exchangeOf)) return { error: "The order being exchanged was not found." };
   const { timezone } = await getPrefs();
   const picked = readOrderDate(form, timezone);
 
@@ -152,6 +155,13 @@ export async function createOrder(
   try {
     orderId = await db.transaction(async (tx) => {
       if (shipperRef) await refuseUsedRef(tx, shipperRef);
+      if (exchangeOf) {
+        const [original] = await tx
+          .select({ id: orders.id })
+          .from(orders)
+          .where(eq(orders.id, exchangeOf));
+        if (!original) throw new StockError("The order being exchanged was not found.");
+      }
       // Check stock first (and hold it) so a refused order never uses up
       // an order number.
       const found = await tx
@@ -227,6 +237,7 @@ export async function createOrder(
           instruction: optional(form, "instruction"),
           notes: optional(form, "notes"),
           trackingNumber: shipperRef,
+          exchangeOfId: exchangeOf || null,
           createdBy: user.id,
           ...(createdAt && { createdAt }),
         })
@@ -346,6 +357,8 @@ export async function updateOrder(
         .set({
           status,
           ...stamps(status),
+          ...(status === "returned" &&
+            order.status !== "returned" && { returnedAt: sql`now()` }),
           trackingNumber: typedRef,
           notes: optional(form, "notes"),
           // A changed date keeps the order's time of day.
@@ -498,4 +511,55 @@ export async function setOrderProgress(
   }
   refresh();
   return { ok: "Saved." };
+}
+
+// "Create Return" in an order's Actions: the order becomes a return, its
+// items go back into stock, and what the customer agreed to pay towards the
+// delivery cost (if anything) is kept with it.
+export async function createReturn(
+  orderId: string,
+  _state: ActionState,
+  form: FormData,
+): Promise<ActionState> {
+  const user = await requireUser();
+  if (!isUuid(orderId)) return { error: "Order not found." };
+  const covers = form.get("customerPays") === "on";
+  const fee = covers ? amount(form, "returnFee") : null;
+  if (covers && (text(form, "returnFee") === "" || fee === null)) {
+    return { error: "Enter how much of the delivery cost the customer is covering." };
+  }
+
+  try {
+    await db.transaction(async (tx) => {
+      const [order] = await tx
+        .select({ status: orders.status, number: orders.number })
+        .from(orders)
+        .where(eq(orders.id, orderId))
+        .for("update");
+      if (!order) throw new StockError("Order not found.");
+      if (closed.includes(order.status)) {
+        throw new StockError(`This order is already ${order.status}.`);
+      }
+      const items = await tx.select().from(orderItems).where(eq(orderItems.orderId, orderId));
+      for (const item of items) {
+        await changeStock(tx, {
+          variantId: item.variantId,
+          change: item.quantity,
+          reason: "return",
+          note: `Order #${order.number}`,
+          orderId,
+          userId: user.id,
+        });
+      }
+      await tx
+        .update(orders)
+        .set({ status: "returned", returnedAt: sql`now()`, returnFee: fee })
+        .where(eq(orders.id, orderId));
+    });
+  } catch (err) {
+    if (err instanceof StockError) return { error: err.message };
+    throw err;
+  }
+  refresh();
+  return { ok: "Return created." };
 }

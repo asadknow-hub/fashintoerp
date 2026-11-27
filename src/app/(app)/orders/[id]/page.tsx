@@ -64,6 +64,19 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
     0,
   );
   const closed = order.status === "cancelled" || order.status === "returned";
+  // The order this one replaces, and any orders made to replace this one.
+  const [[replaces], replacedBy] = await Promise.all([
+    order.exchangeOfId
+      ? db
+          .select({ id: orders.id, number: orders.number })
+          .from(orders)
+          .where(eq(orders.id, order.exchangeOfId))
+      : Promise.resolve([]),
+    db
+      .select({ id: orders.id, number: orders.number })
+      .from(orders)
+      .where(eq(orders.exchangeOfId, order.id)),
+  ]);
 
   return (
     <div className="space-y-3">
@@ -222,6 +235,42 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
               <p>{order.trackingNumber}</p>
             </div>
           )}
+          {(replaces || replacedBy.length > 0) && (
+            <div data-order-exchange>
+              <p className="label">Exchange</p>
+              {replaces && (
+                <p>
+                  This order is an exchange for{" "}
+                  <Link href={`/orders/${replaces.id}`} className="font-semibold text-brand underline">
+                    Order #{replaces.number}
+                  </Link>
+                </p>
+              )}
+              {replacedBy.map((next) => (
+                <p key={next.id}>
+                  Exchanged with{" "}
+                  <Link href={`/orders/${next.id}`} className="font-semibold text-brand underline">
+                    Order #{next.number}
+                  </Link>
+                </p>
+              ))}
+            </div>
+          )}
+          {order.status === "returned" && (
+            <div data-order-return>
+              <p className="label">Return</p>
+              {order.returnedAt && (
+                <p className="text-stone-600">
+                  Returned: {formatDateTime(order.returnedAt, timezone)}
+                </p>
+              )}
+              <p>
+                {order.returnFee === null
+                  ? "Customer is not covering the delivery cost"
+                  : `Customer pays ${formatMoney(order.returnFee, currency)} of the delivery cost`}
+              </p>
+            </div>
+          )}
           {(order.portalAt || company) && (
             <div data-order-delivery>
               <p className="label">Delivery</p>
@@ -242,7 +291,18 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
                 </p>
               )}
               {order.deliveryCharge !== null && (
-                <p>Delivery charge: {formatMoney(order.deliveryCharge, currency)}</p>
+                <>
+                  <p>Delivery charge: {formatMoney(order.deliveryCharge, currency)}</p>
+                  {order.status === "delivered" && (
+                    <p className="font-semibold">
+                      You receive:{" "}
+                      {formatMoney(
+                        Number(order.codAmount) - Number(order.deliveryCharge),
+                        currency,
+                      )}
+                    </p>
+                  )}
+                </>
               )}
             </div>
           )}

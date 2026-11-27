@@ -1,9 +1,16 @@
 import { and, desc, eq, lte, notInArray, sql } from "drizzle-orm";
-import { Coins, Package, ShoppingCart, TrendingUp } from "lucide-react";
+import { Coins, Package, ShoppingCart, TrendingUp, Truck } from "lucide-react";
 import Link from "next/link";
 import { Block, PageHeader } from "@/components/ui";
 import { db } from "@/db";
-import { orderItems, orders, products, stockPurchases, variants } from "@/db/schema";
+import {
+  deliveryCompanies,
+  orderItems,
+  orders,
+  products,
+  stockPurchases,
+  variants,
+} from "@/db/schema";
 import { requireUser } from "@/lib/auth";
 import { formatMoney } from "@/lib/format";
 import { orderAmount } from "@/lib/order-amount";
@@ -29,7 +36,16 @@ export default async function ReportsPage({ searchParams }: PageProps<"/reports"
       : sql`${orders.createdAt} >= now() - make_interval(days => ${period.days})`,
   );
 
-  const [[sales], [pieces], [stock], [paid], [low], best] = await Promise.all([
+  // Delivered orders in the period: the delivery company collects the COD,
+  // keeps its charge, and pays over the rest.
+  const deliveredInPeriod = and(
+    eq(orders.status, "delivered"),
+    period.days === null
+      ? undefined
+      : sql`coalesce(${orders.deliveredAt}, ${orders.createdAt}) >= now() - make_interval(days => ${period.days})`,
+  );
+
+  const [[sales], [pieces], [stock], [paid], [low], best, payouts] = await Promise.all([
     db
       .select({
         orders: sql<number>`count(*)::int`,
@@ -77,7 +93,27 @@ export default async function ReportsPage({ searchParams }: PageProps<"/reports"
       .groupBy(products.id)
       .orderBy(desc(sql`sum(${orderItems.quantity})`))
       .limit(10),
+    db
+      .select({
+        company: sql<string>`coalesce(${deliveryCompanies.name}, 'No company chosen')`,
+        orders: sql<number>`count(*)::int`,
+        cod: sql<string>`coalesce(sum(${orders.codAmount}), 0)`,
+        charges: sql<string>`coalesce(sum(${orders.deliveryCharge}), 0)`,
+      })
+      .from(orders)
+      .leftJoin(deliveryCompanies, eq(deliveryCompanies.id, orders.deliveryCompanyId))
+      .where(deliveredInPeriod)
+      .groupBy(deliveryCompanies.id, deliveryCompanies.name)
+      .orderBy(deliveryCompanies.name),
   ]);
+  const payoutTotal = payouts.reduce(
+    (sum, row) => ({
+      orders: sum.orders + row.orders,
+      cod: sum.cod + Number(row.cod),
+      charges: sum.charges + Number(row.charges),
+    }),
+    { orders: 0, cod: 0, charges: 0 },
+  );
 
   const cards = [
     {
@@ -212,6 +248,62 @@ export default async function ReportsPage({ searchParams }: PageProps<"/reports"
               </Link>
             ))}
           </dl>
+        </Block>
+      </div>
+
+      <div className="mt-3">
+        <Block
+          title="Money from delivery companies"
+          subtitle={`Delivered orders · ${period.label}`}
+          icon={<Truck />}
+          flush
+        >
+          <div className="overflow-x-auto px-4 pb-4">
+            <table className="w-full tabular-nums" data-payouts>
+              <thead>
+                <tr>
+                  <th className="th rounded-l-lg">Delivery company</th>
+                  <th className="th text-center">Delivered orders</th>
+                  <th className="th text-right">COD collected</th>
+                  <th className="th text-right">Their delivery charges</th>
+                  <th className="th rounded-r-lg text-right">You receive</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-stone-100">
+                {payouts.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="td py-4 text-center text-stone-500">
+                      No orders were delivered in this period.
+                    </td>
+                  </tr>
+                )}
+                {payouts.map((row) => (
+                  <tr key={row.company} className="hover:bg-stone-50">
+                    <td className="td font-semibold">{row.company}</td>
+                    <td className="td text-center font-bold">{row.orders}</td>
+                    <td className="td text-right">{formatMoney(row.cod, currency)}</td>
+                    <td className="td text-right">− {formatMoney(row.charges, currency)}</td>
+                    <td className="td text-right font-bold">
+                      {formatMoney(Number(row.cod) - Number(row.charges), currency)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              {payouts.length > 0 && (
+                <tfoot>
+                  <tr className="bg-brand-100 font-bold">
+                    <td className="td rounded-l-lg">Total</td>
+                    <td className="td text-center">{payoutTotal.orders}</td>
+                    <td className="td text-right">{formatMoney(payoutTotal.cod, currency)}</td>
+                    <td className="td text-right">− {formatMoney(payoutTotal.charges, currency)}</td>
+                    <td className="td rounded-r-lg bg-brand text-right text-white">
+                      {formatMoney(payoutTotal.cod - payoutTotal.charges, currency)}
+                    </td>
+                  </tr>
+                </tfoot>
+              )}
+            </table>
+          </div>
         </Block>
       </div>
     </>

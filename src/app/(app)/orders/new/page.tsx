@@ -2,9 +2,9 @@ import { asc, desc, eq, isNotNull, sql } from "drizzle-orm";
 import { ShoppingCart } from "lucide-react";
 import { FreshOnVisit } from "@/components/fresh-on-visit";
 import { db } from "@/db";
-import { orders, productMedia, products, variants } from "@/db/schema";
+import { customers, orders, productMedia, products, variants } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
-import { sortSizes } from "@/lib/format";
+import { isUuid, sortSizes } from "@/lib/format";
 import { getPrefs } from "@/lib/settings";
 import { OrderForm, type OrderProduct } from "./order-form";
 
@@ -60,6 +60,28 @@ export default async function NewOrderPage({
   ]);
   const param = (key: string) =>
     typeof params[key] === "string" ? (params[key] as string) : "";
+
+  // "Create Exchange" on an order opens this screen for a new order that
+  // replaces it, starting with the same customer and address.
+  const exchangeId = isUuid(param("exchange")) ? param("exchange") : null;
+  const [original] = exchangeId
+    ? await db
+        .select({
+          id: orders.id,
+          number: orders.number,
+          ref: orders.trackingNumber,
+          name: customers.name,
+          phone: customers.phone,
+          phone2: orders.phone2,
+          country: orders.country,
+          city: orders.city,
+          area: orders.area,
+          street: orders.street,
+        })
+        .from(orders)
+        .innerJoin(customers, eq(customers.id, orders.customerId))
+        .where(eq(orders.id, exchangeId))
+    : [];
 
   // Group the sellable items under their product.
   const byProduct = new Map<string, OrderProduct>();
@@ -133,10 +155,21 @@ export default async function NewOrderPage({
         header={header}
         products={catalog}
         defaults={{
-          name: param("name"),
-          phone: param("phone"),
+          name: original?.name ?? param("name"),
+          phone: original?.phone ?? param("phone"),
+          phone2: original?.phone2 ?? "",
+          country: original?.country ?? "",
+          city: original?.city ?? "",
+          area: original?.area ?? "",
+          street: original?.street ?? "",
           conversationId: param("conversation"),
-          source: param("source"),
+          source: original ? "exchange" : param("source"),
+          exchange: original
+            ? {
+                id: original.id,
+                label: `Order #${original.number}${original.ref ? ` (${original.ref})` : ""}`,
+              }
+            : null,
         }}
       />
     </FreshOnVisit>

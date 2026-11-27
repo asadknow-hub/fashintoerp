@@ -12,6 +12,7 @@ import {
   Package,
   Plus,
   Quote,
+  Repeat,
   Search,
   Smartphone,
   Trash2,
@@ -652,7 +653,19 @@ type Props = {
   nextRef: string;
   // The title of the screen; the order date sits beside it.
   header: React.ReactNode;
-  defaults: { name: string; phone: string; conversationId: string; source: string };
+  defaults: {
+    name: string;
+    phone: string;
+    phone2: string;
+    country: string;
+    city: string;
+    area: string;
+    street: string;
+    conversationId: string;
+    source: string;
+    // The order this one replaces, when it is an exchange.
+    exchange: { id: string; label: string } | null;
+  };
 };
 
 const REF_PREFIX = "FO";
@@ -698,15 +711,30 @@ function Editor({
 }: Props) {
   const router = useRouter();
   // An order started from a chat begins with that customer, not an old draft.
-  const fromChat = !!(defaults.conversationId || defaults.name || defaults.phone);
+  const fromChat = !!(
+    defaults.conversationId ||
+    defaults.name ||
+    defaults.phone ||
+    defaults.exchange
+  );
   const [draft] = useState(() => (fromChat ? null : readDraft()));
   const [restored, setRestored] = useState(draft !== null);
   const [rows, setRows] = useState<Row[]>(draft?.rows ?? [blank(0)]);
   const [customer, setCustomer] = useState<Customer>(
-    draft?.customer ?? noCustomer(defaults.name, defaults.phone),
+    draft?.customer ?? {
+      ...noCustomer(defaults.name, defaults.phone),
+      phone2: defaults.phone2,
+      country: defaults.country || DEFAULT_COUNTRY,
+      city: defaults.city,
+      area: defaults.area,
+      street: defaults.street,
+    },
   );
   // Only the number is typed; "FO" always goes in front of it.
-  const [shipperRef, setShipperRef] = useState((draft?.shipperRef ?? "").replace(/\D/g, ""));
+  // An exchange starts with the next FO number already in the box.
+  const [shipperRef, setShipperRef] = useState(
+    (draft?.shipperRef ?? (defaults.exchange ? nextRef : "")).replace(/\D/g, ""),
+  );
   const fullRef = shipperRef ? REF_PREFIX + shipperRef : "";
   const [refNote, setRefNote] = useState<RefNote | null>(null);
   const [today] = useState(() => todayIn(timezone));
@@ -992,6 +1020,23 @@ function Editor({
         </label>
       </div>
 
+      {defaults.exchange && (
+        <p
+          data-exchange
+          className="card flex flex-wrap items-center gap-2 border-violet-200 bg-violet-50 px-3 py-2 text-sm text-violet-900"
+        >
+          <Repeat className="size-4 shrink-0" />
+          <span>
+            <b>Exchange</b> for{" "}
+            <Link href={`/orders/${defaults.exchange.id}`} className="font-semibold underline">
+              {defaults.exchange.label}
+            </Link>
+            . This is saved as a new order, marked as an exchange. Pick what the customer gets
+            instead.
+          </span>
+        </p>
+      )}
+
       {restored && (
         <p className="card flex flex-wrap items-center gap-2 border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
           You have an unfinished order from before. It&apos;s all still here.
@@ -1008,6 +1053,7 @@ function Editor({
       <input type="hidden" name="area" value={customer.area} />
       <input type="hidden" name="cod" value={codWrong ? "" : codAmount.toFixed(2)} />
       <input type="hidden" name="shipperRef" value={fullRef} />
+      <input type="hidden" name="exchangeOf" value={defaults.exchange?.id ?? ""} />
       <input type="hidden" name="orderDate" value={orderDate} />
       <input
         type="hidden"

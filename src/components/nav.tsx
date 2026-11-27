@@ -31,6 +31,7 @@ const menu: Entry[] = [
     items: [
       { label: "Create Order", href: "/orders/new" },
       { label: "All Orders", href: "/orders" },
+      { label: "Order Board", href: "/orders?view=board" },
       { label: "Order Returns", href: "/orders?status=returned" },
     ],
   },
@@ -68,7 +69,12 @@ function place(pathname: string, params: URLSearchParams): Place {
   if (pathname === "/orders") {
     return {
       section: "Orders",
-      item: params.get("status") === "returned" ? "Order Returns" : "All Orders",
+      item:
+        params.get("view") === "board"
+          ? "Order Board"
+          : params.get("status") === "returned"
+            ? "Order Returns"
+            : "All Orders",
     };
   }
   if (pathname.startsWith("/orders/")) {

@@ -1,4 +1,5 @@
 import { and, asc, count, desc, eq, exists, ilike, inArray, or, sql } from "drizzle-orm";
+import { Columns3, List } from "lucide-react";
 import Link from "next/link";
 import {
   Badge,
@@ -21,7 +22,8 @@ import {
 import { requireUser } from "@/lib/auth";
 import { formatDate, formatDateTime, formatMoney, isUuid } from "@/lib/format";
 import { getPrefs } from "@/lib/settings";
-import { OrderActions } from "./order-actions";
+import { OrderActions, type OrderCard } from "./order-actions";
+import { OrderBoard } from "./order-board";
 
 type Status = (typeof orders.status.enumValues)[number];
 
@@ -48,6 +50,8 @@ export default async function OrdersPage({
   const q = typeof params.q === "string" ? params.q.trim() : "";
   const status = typeof params.status === "string" ? params.status : "";
   const filter = filters.find((f) => f.key === status) ?? filters[0];
+  // The same orders as cards in columns, one column per step.
+  const board = params.view === "board";
   const { currency, timezone } = await getPrefs();
   const number = /^#?\d+$/.test(q) ? Number(q.replace("#", "")) : null;
 
@@ -60,7 +64,18 @@ export default async function OrdersPage({
 
   const page = pageNumber(params.page);
   const where = and(
-    filter.statuses ? inArray(orders.status, filter.statuses) : undefined,
+    board
+      ? // Everything still on its way, plus what was delivered this week.
+        or(
+          inArray(orders.status, ["new", "confirmed", "packed", "shipped"]),
+          and(
+            eq(orders.status, "delivered"),
+            sql`coalesce(${orders.deliveredAt}, ${orders.createdAt}) >= now() - interval '7 days'`,
+          ),
+        )
+      : filter.statuses
+        ? inArray(orders.status, filter.statuses)
+        : undefined,
     only
       ? exists(
           db
@@ -108,6 +123,8 @@ export default async function OrdersPage({
         dispatchedAt: orders.dispatchedAt,
         deliveredAt: orders.deliveredAt,
         deliveryCharge: orders.deliveryCharge,
+        returnFee: orders.returnFee,
+        exchangeOfId: orders.exchangeOfId,
         createdAt: orders.createdAt,
         customer: customers.name,
         phone: customers.phone,
@@ -117,8 +134,8 @@ export default async function OrdersPage({
       .leftJoin(deliveryCompanies, eq(deliveryCompanies.id, orders.deliveryCompanyId))
       .where(where)
       .orderBy(desc(orders.createdAt))
-      .limit(PAGE_SIZE)
-      .offset((page - 1) * PAGE_SIZE),
+      .limit(board ? 300 : PAGE_SIZE)
+      .offset(board ? 0 : (page - 1) * PAGE_SIZE),
     db
       .select({
         id: deliveryCompanies.id,
@@ -161,6 +178,44 @@ export default async function OrdersPage({
   }
   const when = (date: Date | null) => (date ? formatDateTime(date, timezone) : null);
 
+  // Each order written out for the Actions pop-up and the board.
+  const stageOf = (status: Status): OrderCard["stage"] =>
+    status === "new"
+      ? "new"
+      : status === "confirmed" || status === "packed"
+        ? "portal"
+        : status === "shipped"
+          ? "dispatched"
+          : status === "delivered"
+            ? "delivered"
+            : "closed";
+  const card = (row: (typeof rows)[number]): OrderCard => ({
+    id: row.id,
+    number: row.number,
+    ref: row.ref,
+    customer: row.customer,
+    phone: row.phone,
+    stage: stageOf(row.status),
+    place: [row.city, row.area].filter(Boolean).join(" · "),
+    contents: [...(contents.get(row.id)?.products ?? [])]
+      .map(([product, what]) => `${product}: ${what.join(", ")}`)
+      .join(" · "),
+    cod: row.payment === "cod" ? formatMoney(row.codAmount, currency) : "Paid",
+    exchange: row.exchangeOfId !== null,
+    company: row.company,
+    companyId: row.companyId,
+    portalAt: when(row.portalAt),
+    dispatchedAt: when(row.dispatchedAt),
+    deliveredAt: when(row.deliveredAt),
+    deliveryCharge: row.deliveryCharge === null ? null : Number(row.deliveryCharge),
+  });
+  // The company an order went with stays choosable for it even after it
+  // was taken off the list in Settings.
+  const companiesFor = (used: (string | null)[]) =>
+    companies
+      .filter((company) => company.active || used.includes(company.id))
+      .map((company) => ({ id: company.id, name: company.name, rate: Number(company.rate) }));
+
   const pageHref = (target: number) => {
     const query = new URLSearchParams();
     if (filter.key) query.set("status", filter.key);
@@ -178,11 +233,13 @@ export default async function OrdersPage({
   return (
     <>
       <PageHeader
-        title={filter.key === "returned" ? "Order Returns" : "Orders"}
+        title={board ? "Order Board" : filter.key === "returned" ? "Order Returns" : "Orders"}
         subtitle={
-          filter.key === "returned"
-            ? "Orders that came back. Their items were put back in stock."
-            : undefined
+          board
+            ? "Drag an order to its next step, or use its Actions button."
+            : filter.key === "returned"
+              ? "Orders that came back. Their items were put back in stock."
+              : undefined
         }
         action={{ href: "/orders/new", label: "Create Order" }}
       />
@@ -203,7 +260,28 @@ export default async function OrdersPage({
       )}
 
       <div className="mb-2 flex flex-wrap items-center gap-3">
-        <div className="flex flex-wrap gap-1">
+        <div
+          data-view-toggle
+          className="flex overflow-hidden rounded-lg border border-stone-200 bg-white text-xs font-semibold"
+        >
+          {[
+            { on: !board, href: "/orders", label: "List", icon: List },
+            { on: board, href: "/orders?view=board", label: "Board", icon: Columns3 },
+          ].map((view) => (
+            <Link
+              key={view.label}
+              href={view.href}
+              aria-current={view.on ? "true" : undefined}
+              className={
+                "flex items-center gap-1.5 px-3 py-1.5 " +
+                (view.on ? "bg-brand text-white" : "text-stone-700 hover:bg-stone-100")
+              }
+            >
+              <view.icon className="size-3.5" /> {view.label}
+            </Link>
+          ))}
+        </div>
+        <div className={"flex flex-wrap gap-1" + (board ? " hidden" : "")}>
           {filters.map((f) => (
             <Link
               key={f.key}
@@ -229,7 +307,8 @@ export default async function OrdersPage({
           ))}
         </div>
         <form className="ml-auto flex gap-2">
-          {filter.key && (
+          {board && <input type="hidden" name="view" value="board" />}
+          {!board && filter.key && (
             <input type="hidden" name="status" value={filter.key} />
           )}
           <input
@@ -242,7 +321,13 @@ export default async function OrdersPage({
         </form>
       </div>
 
-      {rows.length === 0 ? (
+      {board ? (
+        <OrderBoard
+          currency={currency}
+          cards={rows.map(card)}
+          companies={companiesFor(rows.map((row) => row.companyId))}
+        />
+      ) : rows.length === 0 ? (
         <Empty
           title={
             filter.key === "returned" && !q
@@ -290,6 +375,11 @@ export default async function OrdersPage({
                         #{row.number}
                       </Link>
                       {row.ref && <span className="block text-xs text-stone-500">{row.ref}</span>}
+                      {row.exchangeOfId && (
+                        <span className="mt-0.5 block text-[11px] font-bold text-violet-700">
+                          Exchange
+                        </span>
+                      )}
                       <span className="mt-0.5 block">
                         <Badge tone={orderStatusTone[row.status]}>
                           {orderStatusLabel[row.status]}
@@ -348,26 +438,8 @@ export default async function OrdersPage({
                       ) : (
                         <OrderActions
                           currency={currency}
-                          // The company this order went with stays choosable
-                          // even after it was taken off the list.
-                          companies={companies
-                            .filter((company) => company.active || company.id === row.companyId)
-                            .map((company) => ({
-                              id: company.id,
-                              name: company.name,
-                              rate: Number(company.rate),
-                            }))}
-                          order={{
-                            id: row.id,
-                            number: row.number,
-                            customer: row.customer,
-                            companyId: row.companyId,
-                            portalAt: when(row.portalAt),
-                            dispatchedAt: when(row.dispatchedAt),
-                            deliveredAt: when(row.deliveredAt),
-                            deliveryCharge:
-                              row.deliveryCharge === null ? null : Number(row.deliveryCharge),
-                          }}
+                          companies={companiesFor([row.companyId])}
+                          order={card(row)}
                         />
                       )}
                       {row.company && (
@@ -375,6 +447,13 @@ export default async function OrdersPage({
                           {row.company}
                           {row.deliveryCharge !== null &&
                             ` · ${formatMoney(row.deliveryCharge, currency)}`}
+                        </span>
+                      )}
+                      {row.status === "returned" && (
+                        <span className="mt-1 block text-xs text-stone-500">
+                          {row.returnFee === null
+                            ? "Customer not covering delivery"
+                            : `Customer pays ${formatMoney(row.returnFee, currency)}`}
                         </span>
                       )}
                     </td>
@@ -385,7 +464,7 @@ export default async function OrdersPage({
           </table>
         </div>
       )}
-      <Pager page={page} pageSize={PAGE_SIZE} total={total} href={pageHref} />
+      {!board && <Pager page={page} pageSize={PAGE_SIZE} total={total} href={pageHref} />}
     </>
   );
 }
