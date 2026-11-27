@@ -10,13 +10,23 @@ const globalForDb = globalThis as unknown as {
 
 function client() {
   // prepare:false keeps this working with pooled connections (e.g. Supabase).
-  // Connections that sit unused are handed back after a few seconds, so
-  // copies of the app that have gone quiet don't hold on to them.
+  //
+  // max_pipeline:1 sends one query at a time on each connection. Supabase's
+  // pooler on port 6543 stops answering when several are sent together (see
+  // "Connection poolers" in the postgres package's README), which left every
+  // page loading forever.
+  //
+  // The timeouts make a database that has gone quiet show up as an error
+  // within seconds instead of a page that never finishes, and unused
+  // connections are handed back so sleeping copies of the app don't keep them.
   globalForDb.pg ??= postgres(databaseUrl(), {
     prepare: false,
-    max: 5,
+    max: 10,
+    max_pipeline: 1,
     idle_timeout: 20,
     connect_timeout: 15,
+    queue_timeout: 20,
+    query_timeout: 30,
   });
   return globalForDb.pg;
 }
