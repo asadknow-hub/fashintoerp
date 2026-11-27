@@ -30,7 +30,8 @@ export type OrderCard = {
   // What the customer paid for the order: its COD, or its value when it
   // was paid beforehand. A return gives this back, less what they cover.
   paid: number;
-  exchange: boolean;
+  // For an exchange: the name of the order it replaces.
+  exchangeOf: string | null;
   company: string | null;
   companyId: string | null;
   // When each step was done; null if not yet.

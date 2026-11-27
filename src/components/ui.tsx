@@ -1,3 +1,4 @@
+import { Info } from "lucide-react";
 import Link from "next/link";
 
 export function PageHeader({
@@ -86,6 +87,7 @@ const tones = {
   amber: "bg-amber-100 text-amber-800",
   red: "bg-rose-100 text-rose-800",
   blue: "bg-sky-100 text-sky-800",
+  purple: "bg-violet-100 text-violet-800",
 } as const;
 
 export function Badge({
@@ -103,6 +105,40 @@ export function Badge({
       }
     >
       {children}
+    </span>
+  );
+}
+
+// The tag for an order's state. A delivered order that was later swapped
+// for another one reads "Exchanged".
+export function OrderBadge({
+  status,
+  exchanged = false,
+}: {
+  status: keyof typeof orderStatusLabel;
+  exchanged?: boolean;
+}) {
+  return exchanged && status === "delivered" ? (
+    <Badge tone="purple">Exchanged</Badge>
+  ) : (
+    <Badge tone={orderStatusTone[status]}>{orderStatusLabel[status]}</Badge>
+  );
+}
+
+// A small "i" beside an order that was made as an exchange. Pointing at it
+// says which order it replaces.
+export function ExchangeInfo({ of }: { of: string }) {
+  return (
+    <span
+      data-exchange-of={of}
+      tabIndex={0}
+      aria-label={`Exchange of ${of}`}
+      className="group relative ml-1 inline-flex cursor-help align-middle text-violet-600 outline-none"
+    >
+      <Info className="size-3.5" strokeWidth={2.4} />
+      <span className="pointer-events-none absolute top-1/2 left-full z-20 ml-1.5 hidden -translate-y-1/2 rounded-md bg-stone-900 px-2 py-1 text-[11px] font-semibold whitespace-nowrap text-white shadow-lg group-hover:block group-focus:block">
+        Exchange of {of}
+      </span>
     </span>
   );
 }

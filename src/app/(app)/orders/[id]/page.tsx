@@ -16,7 +16,7 @@ import {
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ActionForm } from "@/components/action-form";
-import { Badge, orderStatusLabel, orderStatusTone } from "@/components/ui";
+import { ExchangeInfo, OrderBadge } from "@/components/ui";
 import { db } from "@/db";
 import {
   customers,
@@ -105,6 +105,7 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
           id: orders.id,
           number: orders.number,
           ref: orders.trackingNumber,
+          status: orders.status,
           createdAt: orders.createdAt,
         })
         .from(orders)
@@ -181,7 +182,7 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
     contents: items.map((item) => `${item.quantity} ${what(item)}`).join(", "),
     cod: prepaid ? "Paid" : money(cod),
     paid,
-    exchange: order.exchangeOfId !== null,
+    exchangeOf: replaces ? orderName(replaces.ref, replaces.number) : null,
     company: company?.name ?? null,
     companyId: order.deliveryCompanyId,
     portalAt: when(order.portalAt),
@@ -264,12 +265,13 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
         <div className="min-w-0">
           <h1 className="flex flex-wrap items-center gap-3 text-2xl leading-tight font-extrabold tracking-tight">
             Order {name}
-            <Badge tone={orderStatusTone[order.status]}>{orderStatusLabel[order.status]}</Badge>
-            {replaces && (
-              <span className="rounded-full bg-violet-100 px-2.5 py-0.5 text-xs font-bold text-violet-700">
-                Exchange
-              </span>
-            )}
+            <span className="flex items-center text-base">
+              <OrderBadge
+                status={order.status}
+                exchanged={replacedBy.some((next) => next.status !== "cancelled")}
+              />
+              {replaces && <ExchangeInfo of={orderName(replaces.ref, replaces.number)} />}
+            </span>
           </h1>
           <p className="flex items-center text-sm text-stone-500">
             {formatDateTime(order.createdAt, timezone)}
@@ -592,6 +594,18 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
                   <dt>Paid before delivery</dt>
                   <dd className="font-semibold text-emerald-700">− {money(subtotal + delivery)}</dd>
                 </div>
+              ) : replaces && discount > 0.004 ? (
+                // On an exchange the pieces were paid for on the first order;
+                // only the delivery charge is collected this time.
+                <div className="flex justify-between gap-3 py-2" data-paid-before>
+                  <dt>
+                    Collected on original order{" "}
+                    <Link href={`/orders/${replaces.id}`} className="font-semibold text-brand underline">
+                      {orderName(replaces.ref, replaces.number)}
+                    </Link>
+                  </dt>
+                  <dd className="shrink-0 font-semibold text-emerald-700">− {money(discount)}</dd>
+                </div>
               ) : discount > 0.004 ? (
                 <div className="flex justify-between py-2">
                   <dt>Discount</dt>
@@ -604,7 +618,12 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
                 </div>
               ) : null}
               <div className="mt-1 flex items-center justify-between rounded-lg bg-brand-100 px-3 py-2.5 text-base font-extrabold text-brand-700">
-                <dt>Total (COD)</dt>
+                <dt>
+                  Total (COD)
+                  {replaces && (
+                    <span className="block text-xs font-semibold">delivery charge only</span>
+                  )}
+                </dt>
                 <dd>{money(cod)}</dd>
               </div>
             </dl>

@@ -4,8 +4,7 @@ import {
   Badge,
   Block,
   Empty,
-  orderStatusLabel,
-  orderStatusTone,
+  OrderBadge,
   PageHeader,
 } from "@/components/ui";
 import { db } from "@/db";
@@ -64,6 +63,9 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
             id: orders.id,
             number: orders.number,
             ref: orders.trackingNumber,
+            exchanged: sql<boolean>`exists (
+          select 1 from orders x where x.exchange_of_id = ${orders.id} and x.status <> 'cancelled'
+        )`,
             status: orders.status,
             payment: orders.payment,
             codAmount: orders.codAmount,
@@ -159,7 +161,7 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
                       {order.customer}
                       {order.phone ? ` · ${order.phone}` : ""} · {formatDate(order.createdAt, timezone)}
                     </span>
-                    <Badge tone={orderStatusTone[order.status]}>{orderStatusLabel[order.status]}</Badge>
+                    <OrderBadge status={order.status} exchanged={order.exchanged} />
                     <span className="shrink-0 tabular-nums">{order.payment === "cod" ? formatMoney(order.codAmount, currency) : "Paid"}</span>
                   </Link>
                 </li>

@@ -4,8 +4,7 @@ import Link from "next/link";
 import {
   Badge,
   Block,
-  orderStatusLabel,
-  orderStatusTone,
+  OrderBadge,
   PageHeader,
   stockTone,
 } from "@/components/ui";
@@ -71,6 +70,9 @@ export default async function DashboardPage() {
         id: orders.id,
         number: orders.number,
         ref: orders.trackingNumber,
+        exchanged: sql<boolean>`exists (
+          select 1 from orders x where x.exchange_of_id = ${orders.id} and x.status <> 'cancelled'
+        )`,
         status: orders.status,
         payment: orders.payment,
         codAmount: orders.codAmount,
@@ -206,7 +208,7 @@ export default async function DashboardPage() {
                 <span className="min-w-0 flex-1 truncate text-stone-600">
                   {order.customer} · {formatDate(order.createdAt, timezone)}
                 </span>
-                <Badge tone={orderStatusTone[order.status]}>{orderStatusLabel[order.status]}</Badge>
+                <OrderBadge status={order.status} exchanged={order.exchanged} />
                 <span className="text-right tabular-nums">
                   {order.payment === "cod" ? formatMoney(order.codAmount, currency) : "Paid"}
                 </span>

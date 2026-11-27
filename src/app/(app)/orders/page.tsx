@@ -4,10 +4,9 @@ import Link from "next/link";
 import { ClickableRow } from "@/components/clickable-row";
 import { CopyButton } from "@/components/copy-button";
 import {
-  Badge,
   Empty,
-  orderStatusLabel,
-  orderStatusTone,
+  ExchangeInfo,
+  OrderBadge,
   PageHeader,
   pageNumber,
   Pager,
@@ -131,6 +130,15 @@ export default async function OrdersPage({
         deliveryCharge: orders.deliveryCharge,
         returnFee: orders.returnFee,
         exchangeOfId: orders.exchangeOfId,
+        // For an exchange: the name of the order it replaces.
+        exchangeOf: sql<string | null>`(
+          select coalesce(x.tracking_number, '#' || x.number) from orders x
+          where x.id = ${orders.exchangeOfId}
+        )`,
+        // True when another order (not a cancelled one) was made to replace this one.
+        exchanged: sql<boolean>`exists (
+          select 1 from orders x where x.exchange_of_id = ${orders.id} and x.status <> 'cancelled'
+        )`,
         cancelFee: orders.cancelFee,
         createdAt: orders.createdAt,
         customer: customers.name,
@@ -212,7 +220,7 @@ export default async function OrdersPage({
     contents: said(row.id),
     cod: row.payment === "cod" ? formatMoney(row.codAmount, currency) : "Paid",
     paid: Number(row.payment === "cod" ? row.codAmount : row.total),
-    exchange: row.exchangeOfId !== null,
+    exchangeOf: row.exchangeOf,
     company: row.company,
     companyId: row.companyId,
     portalAt: when(row.portalAt),
@@ -396,15 +404,9 @@ export default async function OrdersPage({
                         {orderName(row.ref, row.number)}
                       </Link>
                       {row.ref && <CopyButton text={row.ref} label="order number" />}
-                      {row.exchangeOfId && (
-                        <span className="mt-0.5 block text-[11px] font-bold text-violet-700">
-                          Exchange
-                        </span>
-                      )}
-                      <span className="mt-0.5 block">
-                        <Badge tone={orderStatusTone[row.status]}>
-                          {orderStatusLabel[row.status]}
-                        </Badge>
+                      <span className="mt-0.5 flex items-center">
+                        <OrderBadge status={row.status} exchanged={row.exchanged} />
+                        {row.exchangeOf && <ExchangeInfo of={row.exchangeOf} />}
                       </span>
                     </td>
                     <td className={cell}>

@@ -3,6 +3,7 @@
 import { GripVertical, ListChecks } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
+import { ExchangeInfo } from "@/components/ui";
 import { type Company, type OrderCard, type Stage, StepsModal } from "./order-actions";
 
 const columns: { stage: Stage; label: string; hint: string; tone: string }[] = [
@@ -107,11 +108,7 @@ export function OrderBoard({
                       >
                         {card.name}
                       </Link>
-                      {card.exchange && (
-                        <span className="rounded-full bg-violet-100 px-1.5 py-0.5 text-[10px] font-bold text-violet-700">
-                          Exchange
-                        </span>
-                      )}
+                      {card.exchangeOf && <ExchangeInfo of={card.exchangeOf} />}
                       <span className="ml-auto font-bold whitespace-nowrap tabular-nums">
                         {card.cod}
                       </span>
