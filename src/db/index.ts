@@ -2,18 +2,22 @@ import "server-only";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import * as schema from "./schema";
+import { databaseUrl } from "./url";
 
 const globalForDb = globalThis as unknown as {
   pg?: ReturnType<typeof postgres>;
 };
 
 function client() {
-  const url = process.env.DATABASE_URL;
-  if (!url) {
-    throw new Error("DATABASE_URL is not set. See README.md.");
-  }
   // prepare:false keeps this working with pooled connections (e.g. Supabase).
-  globalForDb.pg ??= postgres(url, { prepare: false, max: 5 });
+  // Connections that sit unused are handed back after a few seconds, so
+  // copies of the app that have gone quiet don't hold on to them.
+  globalForDb.pg ??= postgres(databaseUrl(), {
+    prepare: false,
+    max: 5,
+    idle_timeout: 20,
+    connect_timeout: 15,
+  });
   return globalForDb.pg;
 }
 

@@ -406,8 +406,8 @@ export async function watchShipperRef(typed: string) {
         and(
           eq(shipperRefClaims.ref, ref),
           ne(shipperRefClaims.userId, user.id),
-          // Their screen checks in every few seconds while it is open.
-          gt(shipperRefClaims.seenAt, sql`now() - interval '30 seconds'`),
+          // Their screen checks in every 15 seconds while it is open.
+          gt(shipperRefClaims.seenAt, sql`now() - interval '40 seconds'`),
         ),
       ),
   ]);

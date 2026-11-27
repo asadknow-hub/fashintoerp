@@ -762,7 +762,7 @@ function Editor({
     const first = setTimeout(ask, 400);
     const again = setInterval(() => {
       if (document.visibilityState === "visible") ask();
-    }, 8000);
+    }, 15000);
     return () => {
       stopped = true;
       clearTimeout(first);
