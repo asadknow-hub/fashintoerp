@@ -82,6 +82,12 @@ export const products = pgTable("products", {
   sku: text("sku"),
   category: text("category"),
   description: text("description"),
+  // Price per piece when someone buys 2, 3, or 4 and more of this product.
+  // Empty means the same as for fewer pieces. The price for one piece is on
+  // each variant.
+  price2: money("price_2"),
+  price3: money("price_3"),
+  price4: money("price_4"),
   archived: boolean("archived").notNull().default(false),
   createdAt: createdAt(),
 }).enableRLS();
@@ -163,11 +169,11 @@ export const stockMovements = pgTable(
   (t) => [index("stock_movements_variant_idx").on(t.variantId, t.createdAt)],
 ).enableRLS();
 
-// What a batch of stock was bought for: how many pieces and the total paid.
-// One is written whenever stock is added (opening stock or received), and
-// they can also be added by hand for stock that was already here. The total
-// is empty until someone fills it in. These are money records only; they
-// never change stock.
+// A batch of stock that was bought: how many pieces and the total paid. One
+// is written whenever stock is added (opening stock or a delivery). The total
+// is empty until someone fills it in. Its lines say which sizes and colors
+// came in; changing or deleting a batch that has lines moves stock with it.
+// Old batches without lines are money records only.
 export const stockPurchases = pgTable(
   "stock_purchases",
   {
@@ -182,6 +188,24 @@ export const stockPurchases = pgTable(
     createdAt: createdAt(),
   },
   (t) => [index("stock_purchases_product_idx").on(t.productId, t.createdAt)],
+).enableRLS();
+
+export const stockPurchaseLines = pgTable(
+  "stock_purchase_lines",
+  {
+    id: id(),
+    purchaseId: uuid("purchase_id")
+      .notNull()
+      .references(() => stockPurchases.id, { onDelete: "cascade" }),
+    variantId: uuid("variant_id")
+      .notNull()
+      .references(() => variants.id, { onDelete: "cascade" }),
+    quantity: integer("quantity").notNull(),
+  },
+  (t) => [
+    index("stock_purchase_lines_purchase_idx").on(t.purchaseId),
+    index("stock_purchase_lines_variant_idx").on(t.variantId),
+  ],
 ).enableRLS();
 
 // A fresh count is saved as a snapshot: what was counted next to what the

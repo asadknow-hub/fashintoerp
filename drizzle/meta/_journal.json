@@ -64,6 +64,13 @@
       "when": 1795778158569,
       "tag": "0008_order_shipping_and_aed",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1795779510878,
+      "tag": "0009_batch_lines_and_tier_prices",
+      "breakpoints": true
     }
   ]
 }

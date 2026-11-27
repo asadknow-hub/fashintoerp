@@ -9,6 +9,7 @@ import {
   products,
   stockCountLines,
   stockCounts,
+  stockPurchaseLines,
   stockPurchases,
   variants,
 } from "@/db/schema";
@@ -172,6 +173,7 @@ export async function createProduct(
     // Each item gets a slightly later time, so colors and sizes stay in the
     // order they were entered.
     const startedAt = Date.now();
+    const opening: { variantId: string; quantity: number }[] = [];
     for (const [index, row] of rows.entries()) {
       const [variant] = await tx
         .insert(variants)
@@ -192,15 +194,22 @@ export async function createProduct(
         reason: "opening",
         userId: user.id,
       });
+      if (row.stock > 0) opening.push({ variantId: variant.id, quantity: row.stock });
     }
     if (pieces > 0) {
-      await tx.insert(stockPurchases).values({
-        productId: product.id,
-        units: pieces,
-        totalCost: totalPaid,
-        note: "Opening stock",
-        createdBy: user.id,
-      });
+      const [batch] = await tx
+        .insert(stockPurchases)
+        .values({
+          productId: product.id,
+          units: pieces,
+          totalCost: totalPaid,
+          note: "Opening stock",
+          createdBy: user.id,
+        })
+        .returning({ id: stockPurchases.id });
+      await tx
+        .insert(stockPurchaseLines)
+        .values(opening.map((line) => ({ ...line, purchaseId: batch.id })));
     }
     if (media.length) {
       await tx.insert(productMedia).values(
@@ -254,6 +263,15 @@ export async function updateProduct(
   const price = priceTyped === "" ? null : amount(form, "price");
   if (!name) return { error: "Give the product a name." };
   if (priceTyped !== "" && price === null) return { error: "Selling price must be a number." };
+  // Price per piece for 2, 3, and 4 or more pieces. Empty means "no special price".
+  const tiers: Partial<Record<"price2" | "price3" | "price4", string | null>> = {};
+  for (const key of ["price2", "price3", "price4"] as const) {
+    if (!form.has(key)) continue;
+    const typed = text(form, key);
+    const value = typed === "" ? null : amount(form, key);
+    if (typed !== "" && value === null) return { error: "Prices must be numbers." };
+    tiers[key] = value;
+  }
 
   try {
     await db.transaction(async (tx) => {
@@ -271,6 +289,7 @@ export async function updateProduct(
           sku,
           category: optional(form, "category"),
           description: optional(form, "description"),
+          ...tiers,
         })
         .where(eq(products.id, productId));
 
@@ -451,7 +470,6 @@ export async function updateVariants(
 }
 
 const adjustments = {
-  received: { reason: "purchase", sign: 1 },
   returned: { reason: "return", sign: 1 },
   damaged: { reason: "damage", sign: -1 },
 } as const;
@@ -468,21 +486,14 @@ export async function adjustStockGrid(
   const kind = adjustments[kindName as keyof typeof adjustments];
   if (!kind) return { error: "Choose what happened." };
   const note = optional(form, "note");
-  // Only asked for when stock is received: what the whole delivery cost.
-  const paidTyped = kindName === "received" ? text(form, "totalPaid") : "";
-  const totalPaid = paidTyped === "" ? null : amount(form, "totalPaid");
-  if (paidTyped !== "" && totalPaid === null) return { error: "Total paid must be a number." };
-
   try {
     const changed = await db.transaction(async (tx) => {
       const rows = await tx
-        .select({ id: variants.id, cost: variants.cost })
+        .select({ id: variants.id })
         .from(variants)
         .where(eq(variants.productId, productId))
         .for("update");
       let count = 0;
-      let pieces = 0;
-      const touched: typeof rows = [];
       for (const row of rows) {
         if (text(form, `qty:${row.id}`) === "") continue;
         const quantity = wholeNumber(form, `qty:${row.id}`);
@@ -496,26 +507,6 @@ export async function adjustStockGrid(
           userId: user.id,
         });
         count++;
-        pieces += quantity;
-        touched.push(row);
-      }
-      if (kindName === "received" && pieces > 0) {
-        await tx.insert(stockPurchases).values({
-          productId,
-          units: pieces,
-          totalCost: totalPaid,
-          note: note ?? "Stock received",
-          createdBy: user.id,
-        });
-        // Items that had no cost yet take theirs from this delivery.
-        if (totalPaid !== null) {
-          const each = (Number(totalPaid) / pieces).toFixed(2);
-          for (const row of touched) {
-            if (Number(row.cost) === 0) {
-              await tx.update(variants).set({ cost: each }).where(eq(variants.id, row.id));
-            }
-          }
-        }
       }
       return count;
     });
@@ -530,52 +521,186 @@ export async function adjustStockGrid(
 
 /* ---------- What stock was bought for ---------- */
 
-function readPurchase(form: FormData) {
-  const units = wholeNumber(form, "units");
-  const paid = text(form, "totalPaid");
-  const totalCost = paid === "" ? null : amount(form, "totalPaid");
-  if (!(units >= 1) || units > 10_000_000) return { error: "Pieces must be a whole number, 1 or more." };
-  if (paid !== "" && totalCost === null) return { error: "Total paid must be a number." };
-  return { units, totalCost, note: optional(form, "note") };
-}
-
-// Records what some stock cost, for stock that is already in the system.
-// It is a money record only: stock is not changed.
-export async function addPurchase(
+// Saves a purchase batch from its pop-up: who it came from, what was paid,
+// and how many pieces of each size and color. A new batch adds those pieces
+// to stock. Changing the numbers of a saved batch moves stock by the
+// difference, so the batches always add up to what was really bought.
+//
+// Old batches that have no size-and-color breakdown are money records: for
+// those only the pieces, the amount and the name can be corrected.
+export async function saveBatch(
   productId: string,
+  batchId: string | null,
   _state: ActionState,
   form: FormData,
 ): Promise<ActionState> {
   const user = await requireUser();
-  if (!isUuid(productId)) return { error: "Product not found." };
-  const values = readPurchase(form);
-  if ("error" in values) return { error: values.error };
-  if (values.totalCost === null) return { error: "Enter the total paid." };
-  await db.insert(stockPurchases).values({ productId, ...values, createdBy: user.id });
+  if (!isUuid(productId) || (batchId !== null && !isUuid(batchId))) {
+    return { error: "That record no longer exists." };
+  }
+  const note = optional(form, "note");
+  const paid = text(form, "totalPaid");
+  const totalCost = paid === "" ? null : amount(form, "totalPaid");
+  if (paid !== "" && totalCost === null) return { error: "The cost must be a number." };
+
+  try {
+    await db.transaction(async (tx) => {
+      const items = await tx
+        .select({ id: variants.id, cost: variants.cost })
+        .from(variants)
+        .where(eq(variants.productId, productId))
+        .for("update");
+
+      const [batch] = batchId
+        ? await tx
+            .select({ id: stockPurchases.id, note: stockPurchases.note })
+            .from(stockPurchases)
+            .where(and(eq(stockPurchases.id, batchId), eq(stockPurchases.productId, productId)))
+            .for("update")
+        : [];
+      if (batchId && !batch) throw new StockError("That batch no longer exists.");
+      const before = batch
+        ? await tx
+            .select({
+              variantId: stockPurchaseLines.variantId,
+              quantity: stockPurchaseLines.quantity,
+            })
+            .from(stockPurchaseLines)
+            .where(eq(stockPurchaseLines.purchaseId, batch.id))
+        : [];
+
+      // A money-only record from before batches kept their sizes and colors.
+      if (batch && before.length === 0) {
+        const units = wholeNumber(form, "units");
+        if (!(units >= 1) || units > 10_000_000) {
+          throw new StockError("Pieces must be a whole number, 1 or more.");
+        }
+        await tx
+          .update(stockPurchases)
+          .set({ units, totalCost, note })
+          .where(eq(stockPurchases.id, batch.id));
+        return;
+      }
+
+      const lines: { variantId: string; quantity: number }[] = [];
+      for (const item of items) {
+        const typed = text(form, `qty:${item.id}`);
+        const quantity = typed === "" ? 0 : wholeNumber(form, `qty:${item.id}`);
+        if (!(quantity >= 0) || quantity > 1_000_000) {
+          throw new StockError("Use whole numbers, 0 or more.");
+        }
+        if (quantity > 0) lines.push({ variantId: item.id, quantity });
+      }
+      const units = lines.reduce((sum, line) => sum + line.quantity, 0);
+      if (units === 0) {
+        throw new StockError(
+          batch
+            ? "Type a number in at least one box. To remove the batch, use Delete."
+            : "Type how many pieces came in, in at least one box.",
+        );
+      }
+
+      const name = note ?? (batch ? null : "Stock received");
+      for (const item of items) {
+        const was = before.find((line) => line.variantId === item.id)?.quantity ?? 0;
+        const now = lines.find((line) => line.variantId === item.id)?.quantity ?? 0;
+        if (now === was) continue;
+        try {
+          await changeStock(tx, {
+            variantId: item.id,
+            change: now - was,
+            reason: "purchase",
+            note: batch ? `Batch corrected${name ? `: ${name}` : ""}` : name,
+            userId: user.id,
+          });
+        } catch (err) {
+          if (!(err instanceof StockError)) throw err;
+          throw new StockError(
+            `${err.message} Some of these pieces were already sold or taken off, so the batch can't go that low.`,
+          );
+        }
+      }
+
+      let purchaseId = batch?.id;
+      if (purchaseId) {
+        await tx
+          .update(stockPurchases)
+          .set({ units, totalCost, note: name })
+          .where(eq(stockPurchases.id, purchaseId));
+        await tx.delete(stockPurchaseLines).where(eq(stockPurchaseLines.purchaseId, purchaseId));
+      } else {
+        const [created] = await tx
+          .insert(stockPurchases)
+          .values({ productId, units, totalCost, note: name, createdBy: user.id })
+          .returning({ id: stockPurchases.id });
+        purchaseId = created.id;
+      }
+      await tx
+        .insert(stockPurchaseLines)
+        .values(lines.map((line) => ({ ...line, purchaseId: purchaseId! })));
+
+      // Items that had no cost yet take theirs from this batch.
+      if (totalCost !== null) {
+        const each = (Number(totalCost) / units).toFixed(2);
+        for (const item of items) {
+          if (Number(item.cost) === 0 && lines.some((line) => line.variantId === item.id)) {
+            await tx.update(variants).set({ cost: each }).where(eq(variants.id, item.id));
+          }
+        }
+      }
+    });
+  } catch (err) {
+    if (err instanceof StockError) return { error: err.message };
+    throw err;
+  }
   refresh();
   return { ok: "Saved." };
 }
 
-export async function updatePurchase(
-  purchaseId: string,
-  _state: ActionState,
-  form: FormData,
-): Promise<ActionState> {
-  await requireUser();
-  if (!isUuid(purchaseId)) return { error: "That record no longer exists." };
-  const values = readPurchase(form);
-  if ("error" in values) return { error: values.error };
-  await db.update(stockPurchases).set(values).where(eq(stockPurchases.id, purchaseId));
-  refresh();
-  return { ok: "Saved." };
-}
-
+// Deleting a batch takes its pieces back out of stock. (An old money-only
+// record has no pieces to take out.)
 export async function deletePurchase(purchaseId: string): Promise<ActionState> {
-  await requireUser();
+  const user = await requireUser();
   if (!isUuid(String(purchaseId))) return { error: "That record no longer exists." };
-  await db.delete(stockPurchases).where(eq(stockPurchases.id, purchaseId));
+  try {
+    await db.transaction(async (tx) => {
+      const [batch] = await tx
+        .select({ id: stockPurchases.id, note: stockPurchases.note })
+        .from(stockPurchases)
+        .where(eq(stockPurchases.id, purchaseId))
+        .for("update");
+      if (!batch) return;
+      const lines = await tx
+        .select({
+          variantId: stockPurchaseLines.variantId,
+          quantity: stockPurchaseLines.quantity,
+        })
+        .from(stockPurchaseLines)
+        .where(eq(stockPurchaseLines.purchaseId, batch.id));
+      for (const line of lines) {
+        try {
+          await changeStock(tx, {
+            variantId: line.variantId,
+            change: -line.quantity,
+            reason: "purchase",
+            note: `Batch deleted${batch.note ? `: ${batch.note}` : ""}`,
+            userId: user.id,
+          });
+        } catch (err) {
+          if (!(err instanceof StockError)) throw err;
+          throw new StockError(
+            `${err.message} Some of this batch was already sold or taken off, so it can't be deleted. Lower its numbers instead.`,
+          );
+        }
+      }
+      await tx.delete(stockPurchases).where(eq(stockPurchases.id, batch.id));
+    });
+  } catch (err) {
+    if (err instanceof StockError) return { error: err.message };
+    throw err;
+  }
   refresh();
-  return null;
+  return { ok: "Batch deleted." };
 }
 
 /* ---------- Fresh counts (snapshots) ---------- */

@@ -46,6 +46,10 @@ export type OrderProduct = {
   name: string;
   category: string | null;
   photo: string | null;
+  // Price per piece when 2, 3, or 4 and more of this product are ordered.
+  price2: number | null;
+  price3: number | null;
+  price4: number | null;
   colors: (string | null)[];
   sizes: (string | null)[];
   variants: OrderVariant[];
@@ -59,7 +63,10 @@ type Row = {
   color: string | null | undefined;
   size: string | null | undefined;
   quantity: string;
+  // Only used once someone types their own price; until then the price
+  // comes from the product and follows how many pieces are ordered.
   unitPrice: string;
+  priceTyped?: boolean;
 };
 
 const blank = (key: number): Row => ({
@@ -467,20 +474,44 @@ function Editor({ products, currency, defaults }: Props) {
         if (row.key !== key) return row;
         const next = { ...row, ...change };
         // A newly chosen item brings its own price.
-        const before = variantOf(row);
-        const after = variantOf(next);
-        if (after && after.id !== before?.id) next.unitPrice = after.price.toFixed(2);
-        if (!after && before) next.unitPrice = "";
+        if (variantOf(next)?.id !== variantOf(row)?.id) {
+          next.unitPrice = "";
+          next.priceTyped = false;
+        }
         return next;
       }),
     );
+
+  // The product's own price for this line: the price for one piece, or the
+  // lower per-piece price once 2, 3, or 4 and more of the product are in the
+  // order (counted across all its colors and sizes).
+  const usualPrice = (row: Row) => {
+    const product = productOf(row);
+    const variant = variantOf(row);
+    if (!product || !variant) return null;
+    const pieces = rows
+      .filter((other) => other.productId === row.productId && variantOf(other))
+      .reduce((sum, other) => sum + (quantityOf(other) ?? 0), 0);
+    const steps = [variant.price, product.price2, product.price3, product.price4];
+    let price = variant.price;
+    let step = 0;
+    for (let index = 1; index < Math.min(pieces, 4); index++) {
+      if (steps[index] !== null) {
+        price = steps[index]!;
+        step = index;
+      }
+    }
+    return { price, pieces, step };
+  };
 
   const lines = rows.map((row) => {
     const product = productOf(row);
     const variant = variantOf(row);
     const quantity = quantityOf(row);
     const free = variant ? freeFor(variant, row) : 0;
-    const price = Number(row.unitPrice);
+    const usual = usualPrice(row);
+    const priceText = row.priceTyped ? row.unitPrice : usual ? usual.price.toFixed(2) : "";
+    const price = Number(priceText);
     const problem = !product
       ? null
       : !variant
@@ -491,7 +522,7 @@ function Editor({ products, currency, defaults }: Props) {
             ? "quantity"
             : quantity > free
               ? "short"
-              : !row.unitPrice.trim() || !Number.isFinite(price) || price < 0
+              : !priceText.trim() || !Number.isFinite(price) || price < 0
                 ? "price"
                 : null;
     // Other sizes and colors of the same product that can be sold right now.
@@ -506,7 +537,7 @@ function Editor({ products, currency, defaults }: Props) {
             )
             .slice(0, 6)
         : [];
-    return { row, product, variant, quantity, free, price, problem, others };
+    return { row, product, variant, quantity, free, price, priceText, usual, problem, others };
   });
 
   const ready = lines.filter((line) => line.variant && !line.problem);
@@ -816,7 +847,7 @@ function Editor({ products, currency, defaults }: Props) {
             </div>
 
             <div className="mt-2 space-y-2">
-              {lines.map(({ row, product, variant, quantity, free, price, problem, others }, index) => {
+              {lines.map(({ row, product, variant, quantity, free, price, priceText, usual, problem, others }, index) => {
                 const red = problem === "out" || problem === "short";
                 return (
                   <div
@@ -950,10 +981,12 @@ function Editor({ products, currency, defaults }: Props) {
                         <input
                           aria-label="Unit Price"
                           inputMode="decimal"
-                          value={row.unitPrice}
+                          value={priceText}
                           placeholder="0.00"
-                          onChange={(event) => update(row.key, { unitPrice: event.target.value })}
-                          style={{ width: `${Math.max(4, row.unitPrice.length || 4)}ch` }}
+                          onChange={(event) =>
+                            update(row.key, { unitPrice: event.target.value, priceTyped: true })
+                          }
+                          style={{ width: `${Math.max(4, priceText.length || 4)}ch` }}
                           className="bg-transparent text-right font-semibold outline-none"
                         />
                       </span>
@@ -1044,6 +1077,24 @@ function Editor({ products, currency, defaults }: Props) {
                       <p className="mt-1 text-xs text-emerald-700 md:pl-10">
                         In stock: {free} · {free - quantity!} left after this order
                         <span className="text-stone-400"> · {variant.sku}</span>
+                        {usual && !row.priceTyped && usual.step > 0 && (
+                          <span data-tier className="font-semibold text-brand">
+                            {" "}
+                            · Price for {usual.pieces >= 4 ? "4 or more" : usual.pieces} pieces
+                          </span>
+                        )}
+                      </p>
+                    )}
+                    {variant && usual && row.priceTyped && price !== usual.price && (
+                      <p className="mt-1 text-xs text-stone-500 md:pl-10">
+                        Your own price.{" "}
+                        <button
+                          type="button"
+                          onClick={() => update(row.key, { unitPrice: "", priceTyped: false })}
+                          className="cursor-pointer font-semibold text-brand underline"
+                        >
+                          Use the usual {formatMoney(usual.price, currency)}
+                        </button>
                       </p>
                     )}
                   </div>

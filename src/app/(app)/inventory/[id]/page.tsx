@@ -22,6 +22,7 @@ import {
   stockCountLines,
   stockCounts,
   stockMovements,
+  stockPurchaseLines,
   stockPurchases,
   users,
   variants,
@@ -61,6 +62,7 @@ export default async function ProductPage({ params }: PageProps<"/inventory/[id]
     countRows,
     countLines,
     purchases,
+    purchaseLines,
     movementTotals,
     [sales],
     categoryRows,
@@ -138,6 +140,16 @@ export default async function ProductPage({ params }: PageProps<"/inventory/[id]
       .where(eq(stockPurchases.productId, id))
       .orderBy(asc(stockPurchases.createdAt))
       .limit(200),
+    // Which sizes and colors each batch brought in.
+    db
+      .select({
+        purchaseId: stockPurchaseLines.purchaseId,
+        variantId: stockPurchaseLines.variantId,
+        quantity: stockPurchaseLines.quantity,
+      })
+      .from(stockPurchaseLines)
+      .innerJoin(stockPurchases, eq(stockPurchases.id, stockPurchaseLines.purchaseId))
+      .where(eq(stockPurchases.productId, id)),
     // Every stock change ever made to this product, added up by kind.
     db
       .select({
@@ -245,6 +257,11 @@ export default async function ProductPage({ params }: PageProps<"/inventory/[id]
         }}
         categories={categoryRows.map((row) => row.category!).filter(Boolean)}
         price={{ value: prices.length === 1 ? String(prices[0]) : "", varies: prices.length > 1 }}
+        tiers={{
+          price2: product.price2 === null ? "" : String(Number(product.price2)),
+          price3: product.price3 === null ? "" : String(Number(product.price3)),
+          price4: product.price4 === null ? "" : String(Number(product.price4)),
+        }}
         currency={currency}
         metrics={{
           averageCost: formatMoney(averageCost, currency),
@@ -288,19 +305,23 @@ export default async function ProductPage({ params }: PageProps<"/inventory/[id]
           <PurchaseBatches
             productId={product.id}
             currency={currency}
-            unitsInStock={available}
+            variants={items.map((v) => ({ id: v.id, size: v.size, color: v.color, stock: v.stock }))}
+            sizes={sizes}
+            colors={colors}
             batches={purchases.map((purchase) => ({
               id: purchase.id,
               date: formatDate(purchase.createdAt, timezone),
               note: purchase.note,
               units: purchase.units,
               totalCost: purchase.totalCost === null ? null : Number(purchase.totalCost),
+              lines: purchaseLines
+                .filter((line) => line.purchaseId === purchase.id)
+                .map((line) => ({ variantId: line.variantId, quantity: line.quantity })),
             }))}
           />
 
           <StockGrid
             productId={product.id}
-            currency={currency}
             variants={items.map((v) => ({
               id: v.id,
               size: v.size,

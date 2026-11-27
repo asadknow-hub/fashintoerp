@@ -4,14 +4,12 @@ import { Shirt } from "lucide-react";
 import {
   startTransition,
   useActionState,
-  useEffect,
   useState,
   useTransition,
 } from "react";
 import type { ActionState } from "@/components/action-form";
 import { Block } from "@/components/ui";
 import { colorDot } from "@/lib/colors";
-import { formatMoney } from "@/lib/format";
 import {
   adjustStockGrid,
   applyCount,
@@ -43,11 +41,6 @@ const modes = {
     hint: "Type what you counted. It is saved as a snapshot and does not change stock.",
     save: "Save count",
   },
-  received: {
-    button: "Receive stock",
-    hint: "Type how many arrived of each.",
-    save: "Save stock",
-  },
   damaged: {
     button: "Damaged / lost",
     hint: "Type how many to take off.",
@@ -70,14 +63,12 @@ export function StockGrid({
   sizes,
   colors,
   counts,
-  currency,
 }: {
   productId: string;
   variants: GridVariant[];
   sizes: (string | null)[];
   colors: (string | null)[];
   counts: CountSnapshot[];
-  currency: string;
 }) {
   // One save path for all three modes, so the editor always closes in the
   // same screen update that brings the fresh numbers.
@@ -94,8 +85,6 @@ export function StockGrid({
   const [mode, setMode] = useState<Mode | null>(null);
   const [typed, setTyped] = useState<Record<string, string>>({});
   const [note, setNote] = useState("");
-  // What a delivery cost in total; only asked for when receiving stock.
-  const [paid, setPaid] = useState("");
   // The snapshot being edited, if any.
   const [editing, setEditing] = useState<CountSnapshot | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
@@ -126,27 +115,11 @@ export function StockGrid({
         : {},
     );
     setNote(snapshot?.note ?? "");
-    setPaid("");
     setEditing(snapshot);
     setError(null);
     setNotice(null);
     setMode(next);
   };
-
-  // The "Receive Stock" button at the top of the page opens the boxes here.
-  useEffect(() => {
-    const open = () => {
-      setTyped({});
-      setNote("");
-      setPaid("");
-      setEditing(null);
-      setError(null);
-      setNotice(null);
-      setMode("received");
-    };
-    window.addEventListener("stock:receive", open);
-    return () => window.removeEventListener("stock:receive", open);
-  }, []);
 
   const typedNumber = (v: GridVariant) => {
     const raw = typed[v.id]?.trim();
@@ -163,7 +136,7 @@ export function StockGrid({
   const after = (v: GridVariant) => {
     const n = typedNumber(v);
     if (n === null || mode === null || mode === "count") return v.stock;
-    return mode === "received" ? v.stock + n : v.stock - n;
+    return v.stock - n;
   };
 
   const find = (color: string | null, size: string | null) =>
@@ -190,7 +163,6 @@ export function StockGrid({
     const data = new FormData();
     data.set("kind", mode);
     data.set("note", note);
-    if (mode === "received") data.set("totalPaid", paid.trim());
     if (editing) data.set("countId", editing.id);
     for (const v of variants) {
       const raw = typed[v.id]?.trim();
@@ -226,18 +198,16 @@ export function StockGrid({
             </span>
           ) : (
             <div className="flex flex-wrap items-center gap-1.5">
-              {(Object.keys(modes) as Mode[])
-                .filter((key) => key !== "received")
-                .map((key) => (
-                  <button
-                    key={key}
-                    type="button"
-                    onClick={() => start(key)}
-                    className="cursor-pointer rounded-md px-2 py-1 text-xs font-semibold text-stone-600 hover:bg-stone-100 hover:text-brand"
-                  >
-                    {modes[key].button}
-                  </button>
-                ))}
+              {(Object.keys(modes) as Mode[]).map((key) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => start(key)}
+                  className="cursor-pointer rounded-md px-2 py-1 text-xs font-semibold text-stone-600 hover:bg-stone-100 hover:text-brand"
+                >
+                  {modes[key].button}
+                </button>
+              ))}
               <span className="rounded-md bg-brand-50 px-2 py-1 text-[11px] font-semibold text-stone-700">
                 {plural(colors.length, "Color")} ×{" "}
                 {plural(sizes.length, "Size")} ={" "}
@@ -395,16 +365,6 @@ export function StockGrid({
               aria-label="Note"
               className="input max-w-xs flex-1 py-1.5"
             />
-            {mode === "received" && (
-              <input
-                value={paid}
-                onChange={(event) => setPaid(event.target.value)}
-                inputMode="decimal"
-                placeholder="Total paid (optional)"
-                aria-label="Total paid"
-                className="input w-44 py-1.5"
-              />
-            )}
             {mode === "count" ? (
               <span data-count-summary className="text-xs text-stone-700">
                 {counted.length === 0 ? (
@@ -428,16 +388,6 @@ export function StockGrid({
                 {total === before
                   ? "No change yet"
                   : `Total ${before} → ${total} (${total > before ? "+" : ""}${total - before})`}
-                {mode === "received" && Number(paid) > 0 && total > before && (
-                  <b className="text-stone-700">
-                    {" "}
-                    · {formatMoney(
-                      Number(paid) / (total - before),
-                      currency,
-                    )}{" "}
-                    per piece
-                  </b>
-                )}
               </span>
             )}
             <span className="ml-auto flex gap-2">
