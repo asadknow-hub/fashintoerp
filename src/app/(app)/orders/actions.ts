@@ -61,7 +61,9 @@ async function refuseUsedRef(tx: Tx, ref: string, exceptOrderId?: string) {
   if (taken) throw new StockError(`${ref} is already used on Order #${taken.number}.`);
 }
 
-type Line = { variantId: string; quantity: number; unitPrice: string };
+type Line = { variantId: string; quantity: number; unitPrice: string; discount: string };
+const lineTotal = (line: Line) =>
+  line.quantity * Number(line.unitPrice) - Number(line.discount);
 
 function readLines(form: FormData): Line[] | null {
   let raw: unknown;
@@ -79,9 +81,23 @@ function readLines(form: FormData): Line[] | null {
     if (!isUuid(variantId)) return null;
     if (!Number.isInteger(quantity) || quantity < 1 || quantity > 10000) return null;
     if (!Number.isFinite(price) || price < 0) return null;
+    // A multi-piece price takes some off the line; never more than the line.
+    const discount = Number(item?.discount ?? 0);
+    if (!Number.isFinite(discount) || discount < 0 || discount > quantity * price + 0.005) {
+      return null;
+    }
     const existing = merged.get(variantId);
-    if (existing) existing.quantity += quantity;
-    else merged.set(variantId, { variantId, quantity, unitPrice: price.toFixed(2) });
+    if (existing) {
+      existing.quantity += quantity;
+      existing.discount = (Number(existing.discount) + discount).toFixed(2);
+    } else {
+      merged.set(variantId, {
+        variantId,
+        quantity,
+        unitPrice: price.toFixed(2),
+        discount: discount.toFixed(2),
+      });
+    }
   }
   return [...merged.values()];
 }
@@ -125,10 +141,7 @@ export async function createOrder(
       ? sql<Date>`((${picked.date}::date + (now() at time zone ${timezone})::time) at time zone ${timezone})`
       : undefined;
 
-  const subtotal = lines.reduce(
-    (sum, line) => sum + line.quantity * Number(line.unitPrice),
-    0,
-  );
+  const subtotal = lines.reduce((sum, line) => sum + lineTotal(line), 0);
   const total = subtotal + Number(shippingFee);
   // Nothing to collect on delivery means it was paid already.
   const payment = Number(codAmount) > 0 ? "cod" : "prepaid";

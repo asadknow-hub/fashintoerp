@@ -78,6 +78,13 @@
       "when": 1795780435379,
       "tag": "0010_shipper_ref_claims",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1795780863410,
+      "tag": "0011_bundle_prices",
+      "breakpoints": true
     }
   ]
 }

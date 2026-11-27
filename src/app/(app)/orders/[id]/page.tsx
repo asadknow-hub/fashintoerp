@@ -39,6 +39,7 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
       id: orderItems.id,
       quantity: orderItems.quantity,
       unitPrice: orderItems.unitPrice,
+      discount: orderItems.discount,
       name: products.name,
       productId: products.id,
       sku: variants.sku,
@@ -51,7 +52,7 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
     .where(eq(orderItems.orderId, id));
 
   const subtotal = items.reduce(
-    (sum, item) => sum + item.quantity * Number(item.unitPrice),
+    (sum, item) => sum + item.quantity * Number(item.unitPrice) - Number(item.discount),
     0,
   );
   const closed = order.status === "cancelled" || order.status === "returned";
@@ -100,7 +101,15 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
                       {formatMoney(item.unitPrice, currency)}
                     </td>
                     <td className="td text-right tabular-nums">
-                      {formatMoney(item.quantity * Number(item.unitPrice), currency)}
+                      {formatMoney(
+                        item.quantity * Number(item.unitPrice) - Number(item.discount),
+                        currency,
+                      )}
+                      {Number(item.discount) > 0 && (
+                        <span className="block text-xs text-stone-500">
+                          multi-piece price, {formatMoney(item.discount, currency)} off
+                        </span>
+                      )}
                     </td>
                   </tr>
                 ))}

@@ -17,6 +17,7 @@ import { requireUser } from "@/lib/auth";
 import { amount, isUuid, optional, text, wholeNumber } from "@/lib/format";
 import { isOurUrl, removeFile } from "@/lib/media";
 import { cleanTag } from "@/lib/media-rules";
+import { offerTotal } from "@/lib/offer";
 import { changeStock, StockError } from "@/lib/stock";
 
 const code = (value: string, length: number) =>
@@ -263,7 +264,7 @@ export async function updateProduct(
   const price = priceTyped === "" ? null : amount(form, "price");
   if (!name) return { error: "Give the product a name." };
   if (priceTyped !== "" && price === null) return { error: "Selling price must be a number." };
-  // Price per piece for 2, 3, and 4 or more pieces. Empty means "no special price".
+  // What 2, 3 and 4 pieces cost together. Empty means "no special price".
   const tiers: Partial<Record<"price2" | "price3" | "price4", string | null>> = {};
   for (const key of ["price2", "price3", "price4"] as const) {
     if (!form.has(key)) continue;
@@ -294,9 +295,30 @@ export async function updateProduct(
         .where(eq(products.id, productId));
 
       const items = await tx
-        .select({ id: variants.id, sku: variants.sku })
+        .select({ id: variants.id, sku: variants.sku, price: variants.price })
         .from(variants)
         .where(eq(variants.productId, productId));
+
+      // More pieces can't cost less than fewer pieces.
+      const [now] = await tx
+        .select({ price2: products.price2, price3: products.price3, price4: products.price4 })
+        .from(products)
+        .where(eq(products.id, productId));
+      const one =
+        price !== null ? Number(price) : Math.max(0, ...items.map((item) => Number(item.price)));
+      const offer = {
+        price2: now.price2 === null ? null : Number(now.price2),
+        price3: now.price3 === null ? null : Number(now.price3),
+        price4: now.price4 === null ? null : Number(now.price4),
+      };
+      for (const [index, key] of (["price2", "price3", "price4"] as const).entries()) {
+        const pieces = index + 2;
+        if (offer[key] !== null && offer[key] < offerTotal(one, offer, pieces - 1)) {
+          throw new StockError(
+            `${pieces} pieces can't cost less than ${pieces - 1} ${pieces === 2 ? "piece" : "pieces"}. These are prices for all the pieces together.`,
+          );
+        }
+      }
       for (const item of items) {
         const change: { price?: string; sku?: string } = {};
         if (price !== null) change.price = price;

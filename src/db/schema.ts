@@ -83,9 +83,9 @@ export const products = pgTable("products", {
   sku: text("sku"),
   category: text("category"),
   description: text("description"),
-  // Price per piece when someone buys 2, 3, or 4 and more of this product.
-  // Empty means the same as for fewer pieces. The price for one piece is on
-  // each variant.
+  // What 2, 3 and 4 pieces of this product cost together (see lib/offer.ts).
+  // Empty means no special price for that many. The price for one piece is
+  // on each variant.
   price2: money("price_2"),
   price3: money("price_3"),
   price4: money("price_4"),
@@ -349,6 +349,9 @@ export const orderItems = pgTable(
       .references(() => variants.id),
     quantity: integer("quantity").notNull(),
     unitPrice: money("unit_price").notNull(),
+    // Taken off this line by a multi-piece price, so the line comes to
+    // quantity × unit price − discount.
+    discount: money("discount").notNull().default("0"),
   },
   (t) => [index("order_items_order_idx").on(t.orderId)],
 ).enableRLS();

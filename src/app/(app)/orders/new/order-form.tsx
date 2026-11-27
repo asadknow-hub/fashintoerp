@@ -33,6 +33,7 @@ import type { ActionState } from "@/components/action-form";
 import { colorDot } from "@/lib/colors";
 import { formatMoney, variantLabel } from "@/lib/format";
 import { COUNTRIES, DEFAULT_COUNTRY, UAE_AREAS, UAE_CITIES } from "@/lib/locations";
+import { pieceCost } from "@/lib/offer";
 import { createOrder, lookupCustomer, releaseShipperRef, watchShipperRef } from "../actions";
 
 export type OrderVariant = {
@@ -49,7 +50,7 @@ export type OrderProduct = {
   name: string;
   category: string | null;
   photo: string | null;
-  // Price per piece when 2, 3, or 4 and more of this product are ordered.
+  // What 2, 3 and 4 pieces of this product cost together (see lib/offer.ts).
   price2: number | null;
   price3: number | null;
   price4: number | null;
@@ -833,35 +834,35 @@ function Editor({
       }),
     );
 
-  // The product's own price for this line: the price for one piece, or the
-  // lower per-piece price once 2, 3, or 4 and more of the product are in the
-  // order (counted across all its colors and sizes).
-  const usualPrice = (row: Row) => {
+  // Multi-piece prices ("2 pieces = 99"). For each product, the pieces on
+  // lines that use the product's own price are counted in order, across all
+  // its colors and sizes: the first piece costs the full price and each one
+  // after it adds what the product's price table says. A line with a price
+  // typed by hand is left out of this.
+  const offers = new Map<number, { net: number; product: string }>();
+  const counted = new Map<string, { pieces: number; one: number }>();
+  for (const row of rows) {
     const product = productOf(row);
     const variant = variantOf(row);
-    if (!product || !variant) return null;
-    const pieces = rows
-      .filter((other) => other.productId === row.productId && variantOf(other))
-      .reduce((sum, other) => sum + (quantityOf(other) ?? 0), 0);
-    const steps = [variant.price, product.price2, product.price3, product.price4];
-    let price = variant.price;
-    let step = 0;
-    for (let index = 1; index < Math.min(pieces, 4); index++) {
-      if (steps[index] !== null) {
-        price = steps[index]!;
-        step = index;
-      }
+    const quantity = quantityOf(row);
+    if (!product || !variant || quantity === null || row.priceTyped) continue;
+    const tally = counted.get(product.id) ?? { pieces: 0, one: variant.price };
+    let net = 0;
+    for (let piece = 0; piece < quantity; piece++) {
+      tally.pieces++;
+      net += Math.round(Math.min(variant.price, pieceCost(tally.one, product, tally.pieces)) * 100);
     }
-    return { price, pieces, step };
-  };
+    counted.set(product.id, tally);
+    offers.set(row.key, { net: net / 100, product: product.id });
+  }
 
   const lines = rows.map((row) => {
     const product = productOf(row);
     const variant = variantOf(row);
     const quantity = quantityOf(row);
     const free = variant ? freeFor(variant, row) : 0;
-    const usual = usualPrice(row);
-    const priceText = row.priceTyped ? row.unitPrice : usual ? usual.price.toFixed(2) : "";
+    const usual = variant ? variant.price : null;
+    const priceText = row.priceTyped ? row.unitPrice : usual !== null ? usual.toFixed(2) : "";
     const price = Number(priceText);
     const problem = !product
       ? null
@@ -888,12 +889,31 @@ function Editor({
             )
             .slice(0, 6)
         : [];
-    return { row, product, variant, quantity, free, price, priceText, usual, problem, others };
+    // What a multi-piece price takes off this line, and what the line comes to.
+    const offer = offers.get(row.key);
+    const full = (quantity ?? 0) * (Number.isFinite(price) ? price : 0);
+    const discount =
+      offer && !problem ? Math.max(0, Math.round((full - offer.net) * 100) / 100) : 0;
+    return {
+      row,
+      product,
+      variant,
+      quantity,
+      free,
+      price,
+      priceText,
+      usual,
+      problem,
+      others,
+      discount,
+      lineTotal: Math.round((full - discount) * 100) / 100,
+      offerPieces: offer ? (counted.get(offer.product)?.pieces ?? 0) : 0,
+    };
   });
 
   const ready = lines.filter((line) => line.variant && !line.problem);
   const blocked = lines.some((line) => line.problem);
-  const subtotal = ready.reduce((sum, line) => sum + line.quantity! * line.price, 0);
+  const subtotal = ready.reduce((sum, line) => sum + line.lineTotal, 0);
   const delivery = Number(shippingFee) || 0;
   const total = subtotal + delivery;
   // The COD follows the total until someone types a different amount.
@@ -997,6 +1017,7 @@ function Editor({
             variantId: line.variant!.id,
             quantity: line.quantity,
             unitPrice: line.price,
+            discount: line.discount,
           })),
         )}
       />
@@ -1269,7 +1290,9 @@ function Editor({
             </div>
 
             <div className="mt-2 space-y-2">
-              {lines.map(({ row, product, variant, quantity, free, price, priceText, usual, problem, others }, index) => {
+              {lines.map((line, index) => {
+                const { row, product, variant, quantity, free, price, priceText, usual } = line;
+                const { problem, others, discount, lineTotal, offerPieces } = line;
                 const red = problem === "out" || problem === "short";
                 return (
                   <div
@@ -1417,7 +1440,7 @@ function Editor({
                         data-line-total
                         className="text-center text-base font-extrabold text-brand tabular-nums"
                       >
-                        {variant && !problem ? formatMoney(quantity! * price, currency) : "—"}
+                        {variant && !problem ? formatMoney(lineTotal, currency) : "—"}
                       </span>
 
                       <button
@@ -1499,15 +1522,15 @@ function Editor({
                       <p className="mt-1 text-xs text-emerald-700 md:pl-10">
                         In stock: {free} · {free - quantity!} left after this order
                         <span className="text-stone-400"> · {variant.sku}</span>
-                        {usual && !row.priceTyped && usual.step > 0 && (
+                        {discount > 0 && (
                           <span data-tier className="font-semibold text-brand">
                             {" "}
-                            · Price for {usual.pieces >= 4 ? "4 or more" : usual.pieces} pieces
+                            · {offerPieces}-piece price: {formatMoney(discount, currency)} off
                           </span>
                         )}
                       </p>
                     )}
-                    {variant && usual && row.priceTyped && price !== usual.price && (
+                    {variant && usual !== null && row.priceTyped && price !== usual && (
                       <p className="mt-1 text-xs text-stone-500 md:pl-10">
                         Your own price.{" "}
                         <button
@@ -1515,7 +1538,7 @@ function Editor({
                           onClick={() => update(row.key, { unitPrice: "", priceTyped: false })}
                           className="cursor-pointer font-semibold text-brand underline"
                         >
-                          Use the usual {formatMoney(usual.price, currency)}
+                          Use the usual {formatMoney(usual, currency)}
                         </button>
                       </p>
                     )}

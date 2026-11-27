@@ -66,7 +66,7 @@ export default async function ReportsPage({ searchParams }: PageProps<"/reports"
         id: products.id,
         name: products.name,
         units: sql<number>`sum(${orderItems.quantity})::int`,
-        revenue: sql<string>`sum(${orderItems.quantity} * ${orderItems.unitPrice})`,
+        revenue: sql<string>`sum(${orderItems.quantity} * ${orderItems.unitPrice} - ${orderItems.discount})`,
       })
       .from(orderItems)
       .innerJoin(orders, eq(orders.id, orderItems.orderId))

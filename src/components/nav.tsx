@@ -10,7 +10,6 @@ import {
   ShoppingBag,
   ShoppingCart,
   Users,
-  Warehouse,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
@@ -42,14 +41,6 @@ const menu: Entry[] = [
     items: [
       { label: "All Products", href: "/products" },
       { label: "Add Product", href: "/inventory/new" },
-    ],
-  },
-  {
-    label: "Inventory",
-    href: "/inventory",
-    icon: Warehouse,
-    items: [
-      { label: "Stock Levels", href: "/inventory" },
       { label: "Low Stock", href: "/inventory?view=low" },
     ],
   },
@@ -88,11 +79,11 @@ function place(pathname: string, params: URLSearchParams): Place {
   if (pathname.startsWith("/inventory/")) {
     return { section: "Products", item: "All Products", page: "Product Details" };
   }
+  // The same products as a table with their stock.
   if (pathname === "/inventory") {
-    return {
-      section: "Inventory",
-      item: params.get("view") === "low" ? "Low Stock" : "Stock Levels",
-    };
+    return params.get("view") === "low"
+      ? { section: "Products", item: "Low Stock" }
+      : { section: "Products", item: "All Products", page: "Stock List" };
   }
   if (pathname === "/purchases") {
     return {

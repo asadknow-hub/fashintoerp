@@ -163,7 +163,7 @@ export default async function ProductPage({ params }: PageProps<"/inventory/[id]
     // Money taken for this product on orders that were not cancelled or returned.
     db
       .select({
-        revenue: sql<string>`coalesce(sum(${orderItems.quantity} * ${orderItems.unitPrice}), 0)`,
+        revenue: sql<string>`coalesce(sum(${orderItems.quantity} * ${orderItems.unitPrice} - ${orderItems.discount}), 0)`,
       })
       .from(orderItems)
       .innerJoin(orders, eq(orders.id, orderItems.orderId))

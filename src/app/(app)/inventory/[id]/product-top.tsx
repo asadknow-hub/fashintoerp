@@ -10,6 +10,7 @@ import {
   Package,
   Plus,
   Tag,
+  X,
 } from "lucide-react";
 import Link from "next/link";
 import {
@@ -21,19 +22,27 @@ import {
 import type { MediaItem } from "@/components/media-manager";
 import { Badge } from "@/components/ui";
 import { formatMoney } from "@/lib/format";
+import { offerTotal, pieceCost } from "@/lib/offer";
 import type { MediaMode } from "@/lib/media-rules";
 import { setArchived, updateProduct } from "../actions";
 import { MediaBlock } from "./media-block";
 
 const NEW = "__new__";
 
-// The price for one piece, and per piece when 2, 3, or 4 and more are bought.
+// What 1, 2, 3 and 4 pieces cost together. The price for 4 also sets what
+// each piece after the fourth adds.
 const priceRows = [
-  { key: "price", pieces: 1, label: "1 piece" },
-  { key: "price2", pieces: 2, label: "2 pieces" },
-  { key: "price3", pieces: 3, label: "3 pieces" },
-  { key: "price4", pieces: 4, label: "4 or more" },
+  { key: "price", pieces: 1, label: "1 piece", nth: "1st" },
+  { key: "price2", pieces: 2, label: "2 pieces", nth: "2nd" },
+  { key: "price3", pieces: 3, label: "3 pieces", nth: "3rd" },
+  { key: "price4", pieces: 4, label: "4+ pieces", nth: "4th" },
 ] as const;
+
+// A typed amount as a number, or null while the box is empty or not a number.
+const typedAmount = (text: string) => {
+  const value = Number(text.trim());
+  return text.trim() !== "" && Number.isFinite(value) && value >= 0 ? value : null;
+};
 
 type Values = {
   name: string;
@@ -148,15 +157,15 @@ export function ProductTop({
     >
       <div>
         <Link
-          href="/inventory"
+          href="/products"
           className="inline-flex items-center gap-2 text-xs font-medium text-stone-500 hover:text-brand"
         >
-          <ArrowLeft className="size-3.5" /> Inventory
+          <ArrowLeft className="size-3.5" /> Products
         </Link>
         <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-2">
           <Link
-            href="/inventory"
-            aria-label="Back to inventory"
+            href="/products"
+            aria-label="Back to products"
             className="text-stone-700 hover:text-brand"
           >
             <ArrowLeft className="size-5" />
@@ -214,6 +223,16 @@ export function ProductTop({
             <button type="button" onClick={receive} className="btn-secondary">
               <Plus className="size-4" /> Receive Stock
             </button>
+            {changed && !saving && (
+              <button
+                type="button"
+                onClick={() => setValues(saved)}
+                title="Put everything back as it was saved"
+                className="btn-secondary"
+              >
+                <X className="size-4" /> Discard
+              </button>
+            )}
             <button
               type="submit"
               disabled={saving || !changed}
@@ -313,27 +332,31 @@ export function ProductTop({
                         </span>
                       </th>
                       <th className="px-1 py-1.5 font-semibold text-stone-600">
-                        Per piece ({currency})
+                        Price ({currency})
                       </th>
                       <th className="px-2.5 py-1.5 text-right font-semibold text-stone-600">
-                        Total
+                        Works out as
                       </th>
                     </tr>
                   </thead>
                   <tbody>
-                    {priceRows.map((row, index) => {
-                      // An empty row costs the same per piece as the row above it.
+                    {priceRows.map((row) => {
                       const own = values[row.key].trim();
-                      const fallback = priceRows
-                        .slice(0, index)
-                        .map((above) => values[above.key].trim())
-                        .filter(Boolean)
-                        .at(-1);
-                      const each = Number(own || fallback);
-                      const known =
-                        (own || fallback) !== undefined &&
-                        (own || fallback) !== "" &&
-                        Number.isFinite(each);
+                      const one = typedAmount(values.price);
+                      const offer = {
+                        price2: typedAmount(values.price2),
+                        price3: typedAmount(values.price3),
+                        price4: typedAmount(values.price4),
+                      };
+                      // What this many cost, and what the last of them adds.
+                      const total = one === null ? null : offerTotal(one, offer, row.pieces);
+                      const adds = one === null ? null : pieceCost(one, offer, row.pieces);
+                      const before =
+                        one === null || row.pieces === 1
+                          ? null
+                          : offerTotal(one, offer, row.pieces - 1);
+                      const tooLow =
+                        own !== "" && before !== null && (typedAmount(own) ?? 0) < before;
                       return (
                         <tr key={row.key} className="border-t border-stone-100">
                           <th className="px-2.5 py-1 text-left font-semibold whitespace-nowrap">
@@ -353,28 +376,41 @@ export function ProductTop({
                                   ? price.varies
                                     ? "varies"
                                     : "0"
-                                  : fallback || "same"
+                                  : total === null
+                                    ? ""
+                                    : String(total)
                               }
                               title={
                                 row.key === "price" && price.varies
                                   ? "Sizes and colors have different prices. Typing one here sets it for all of them."
                                   : undefined
                               }
-                              className="h-7 w-full min-w-14 rounded-md border border-stone-200 bg-white px-2 text-sm font-semibold outline-none placeholder:font-normal placeholder:text-stone-400 focus:border-brand focus:ring-1 focus:ring-brand"
+                              className={
+                                "h-7 w-full min-w-14 rounded-md border bg-white px-2 text-sm font-semibold outline-none placeholder:font-normal placeholder:text-stone-400 focus:border-brand focus:ring-1 focus:ring-brand " +
+                                (tooLow ? "border-rose-500" : "border-stone-200")
+                              }
                             />
                           </td>
                           <td
-                            data-price-total={row.pieces}
+                            data-price-note={row.pieces}
                             className={
                               "px-2.5 py-1 text-right whitespace-nowrap " +
-                              (own ? "font-semibold" : "text-stone-400")
+                              (tooLow
+                                ? "font-semibold text-rose-700"
+                                : own
+                                  ? "font-semibold"
+                                  : "text-stone-400")
                             }
                           >
-                            {!known
+                            {adds === null
                               ? "—"
-                              : row.pieces === 4
-                                ? `${formatMoney(each, currency)} each`
-                                : formatMoney(each * row.pieces, currency)}
+                              : tooLow
+                                ? `Less than ${row.pieces - 1} ${row.pieces === 2 ? "piece" : "pieces"}`
+                                : row.pieces === 1
+                                  ? `${formatMoney(adds, currency)} each`
+                                  : row.pieces === 4
+                                    ? `4th and each extra ${formatMoney(adds, currency)}`
+                                    : `${row.nth} piece for ${formatMoney(adds, currency)}`}
                           </td>
                         </tr>
                       );
