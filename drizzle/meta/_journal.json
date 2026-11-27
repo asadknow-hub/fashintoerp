@@ -71,6 +71,13 @@
       "when": 1795779510878,
       "tag": "0009_batch_lines_and_tier_prices",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1795780435379,
+      "tag": "0010_shipper_ref_claims",
+      "breakpoints": true
     }
   ]
 }

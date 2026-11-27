@@ -1,8 +1,8 @@
-import { asc, eq, sql } from "drizzle-orm";
+import { asc, desc, eq, isNotNull, sql } from "drizzle-orm";
 import { ShoppingCart } from "lucide-react";
 import { FreshOnVisit } from "@/components/fresh-on-visit";
 import { db } from "@/db";
-import { productMedia, products, variants } from "@/db/schema";
+import { orders, productMedia, products, variants } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
 import { sortSizes } from "@/lib/format";
 import { getPrefs } from "@/lib/settings";
@@ -11,10 +11,25 @@ import { OrderForm, type OrderProduct } from "./order-form";
 export default async function NewOrderPage({
   searchParams,
 }: PageProps<"/orders/new">) {
-  const [, params, { currency }, rows] = await Promise.all([
+  const [, params, { currency, timezone }, used, [lastRef], rows] = await Promise.all([
     requireUser(),
     searchParams,
     getPrefs(),
+    // Instructions typed on earlier orders, most used first.
+    db
+      .select({ text: orders.instruction })
+      .from(orders)
+      .where(isNotNull(orders.instruction))
+      .groupBy(orders.instruction)
+      .orderBy(desc(sql`count(*)`), asc(orders.instruction))
+      .limit(12),
+    // The highest FO number used so far.
+    db
+      .select({ ref: orders.trackingNumber })
+      .from(orders)
+      .where(sql`${orders.trackingNumber} ~ '^FO[0-9]{1,12}$'`)
+      .orderBy(desc(sql`substring(${orders.trackingNumber} from 3)::numeric`))
+      .limit(1),
     db
       .select({
         id: variants.id,
@@ -78,9 +93,22 @@ export default async function NewOrderPage({
     sizes: sortSizes(product.sizes),
   }));
 
-  return (
-    <div>
-      <div className="mb-4 flex items-center gap-4">
+  // "Open to Check Allowed" is always offered, then whatever was used before.
+  const instructions = ["Open to Check Allowed"];
+  for (const row of used) {
+    const line = row.text?.trim();
+    if (line && !instructions.some((known) => known.toLowerCase() === line.toLowerCase())) {
+      instructions.push(line);
+    }
+  }
+  // After FO002 comes 003, keeping the zeros in front.
+  const lastDigits = lastRef?.ref?.slice(2) ?? "";
+  const nextRef = lastDigits
+    ? String(BigInt(lastDigits) + BigInt(1)).padStart(lastDigits.length, "0")
+    : "001";
+
+  const header = (
+      <div className="flex items-center gap-4">
         <span className="flex size-14 shrink-0 items-center justify-center rounded-xl bg-brand-100 text-brand">
           <ShoppingCart className="size-7" strokeWidth={1.9} />
         </span>
@@ -93,18 +121,24 @@ export default async function NewOrderPage({
           </p>
         </div>
       </div>
-      <FreshOnVisit>
-        <OrderForm
-          currency={currency}
-          products={catalog}
-          defaults={{
-            name: param("name"),
-            phone: param("phone"),
-            conversationId: param("conversation"),
-            source: param("source"),
-          }}
-        />
-      </FreshOnVisit>
-    </div>
+  );
+
+  return (
+    <FreshOnVisit>
+      <OrderForm
+        currency={currency}
+        timezone={timezone}
+        instructions={instructions}
+        nextRef={nextRef}
+        header={header}
+        products={catalog}
+        defaults={{
+          name: param("name"),
+          phone: param("phone"),
+          conversationId: param("conversation"),
+          source: param("source"),
+        }}
+      />
+    </FreshOnVisit>
   );
 }

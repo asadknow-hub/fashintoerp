@@ -126,7 +126,7 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
             className="card space-y-3 p-3"
           >
             <h2 className="text-sm font-bold text-stone-900">Update order</h2>
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-4 sm:grid-cols-3">
               <Field label="Status">
                 <select
                   name="status"
@@ -141,6 +141,19 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
                   ))}
                 </select>
                 {closed && <input type="hidden" name="status" value={order.status} />}
+              </Field>
+              <Field label="Order date">
+                <input
+                  type="date"
+                  name="orderDate"
+                  defaultValue={new Intl.DateTimeFormat("en-CA", {
+                    timeZone: timezone,
+                    year: "numeric",
+                    month: "2-digit",
+                    day: "2-digit",
+                  }).format(order.createdAt)}
+                  className="input"
+                />
               </Field>
               <Field label="Shipper Ref">
                 <input

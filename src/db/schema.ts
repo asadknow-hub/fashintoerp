@@ -7,6 +7,7 @@ import {
   numeric,
   pgEnum,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
@@ -318,6 +319,22 @@ export const orders = pgTable(
     index("orders_customer_idx").on(t.customerId),
     index("orders_status_idx").on(t.status),
   ],
+).enableRLS();
+
+// Who is typing an order with which shipper ref right now. The Create Order
+// screen keeps its line fresh while the ref is in the box, so two people who
+// start on the same FO number can be told about each other. Old lines are
+// simply ignored.
+export const shipperRefClaims = pgTable(
+  "shipper_ref_claims",
+  {
+    ref: text("ref").notNull(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    seenAt: timestamp("seen_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.ref, t.userId] })],
 ).enableRLS();
 
 export const orderItems = pgTable(

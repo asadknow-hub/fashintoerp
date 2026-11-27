@@ -2,6 +2,7 @@
 
 import {
   Building2,
+  CalendarDays,
   Check,
   ChevronDown,
   Globe,
@@ -11,11 +12,13 @@ import {
   Package,
   Plus,
   Quote,
+  Search,
   Smartphone,
   Trash2,
   User,
   UserRound,
 } from "lucide-react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   startTransition,
@@ -30,7 +33,7 @@ import type { ActionState } from "@/components/action-form";
 import { colorDot } from "@/lib/colors";
 import { formatMoney, variantLabel } from "@/lib/format";
 import { COUNTRIES, DEFAULT_COUNTRY, UAE_AREAS, UAE_CITIES } from "@/lib/locations";
-import { createOrder, lookupCustomer } from "../actions";
+import { createOrder, lookupCustomer, releaseShipperRef, watchShipperRef } from "../actions";
 
 export type OrderVariant = {
   id: string;
@@ -199,6 +202,269 @@ function PlaceField({
   );
 }
 
+// A dropdown with a search box inside it: click it, type a few letters, pick.
+// A name that is not in the list can be used as typed.
+function SearchSelect({
+  icon,
+  label,
+  value,
+  options,
+  placeholder,
+  emptyText,
+  onChange,
+}: {
+  icon: typeof User;
+  label: string;
+  value: string;
+  options: string[];
+  placeholder: string;
+  emptyText: string;
+  onChange: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [active, setActive] = useState(0);
+  const box = useRef<HTMLDivElement>(null);
+  const words = query.trim().toLowerCase();
+  const typed = query.trim().slice(0, 60);
+  const matches = options.filter((option) => option.toLowerCase().includes(words));
+  // Typed something that is not in the list: offer to use it as it is.
+  const custom =
+    typed && !options.some((option) => option.toLowerCase() === words) ? typed : null;
+  const choices = custom ? [...matches, custom] : matches;
+
+  useEffect(() => {
+    if (!open) return;
+    const outside = (event: MouseEvent) => {
+      if (!box.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", outside);
+    return () => document.removeEventListener("mousedown", outside);
+  }, [open]);
+
+  const pick = (choice: string | undefined) => {
+    if (!choice) return;
+    onChange(choice);
+    setOpen(false);
+  };
+
+  return (
+    <div ref={box} className="relative">
+      <IconBox icon={icon} className={open ? "border-brand ring-1 ring-brand" : ""}>
+        <span className="relative flex min-w-0 flex-1">
+          <button
+            type="button"
+            aria-label={label}
+            aria-haspopup="listbox"
+            aria-expanded={open}
+            onClick={() => {
+              setQuery("");
+              setActive(0);
+              setOpen((was) => !was);
+            }}
+            className={
+              "w-full truncate text-left " +
+              selectInside +
+              (value ? "" : " font-medium text-stone-900")
+            }
+          >
+            {value || placeholder}
+          </button>
+          <Arrow />
+        </span>
+      </IconBox>
+      {open && (
+        <div
+          data-search-select
+          className="absolute inset-x-0 top-full z-30 mt-1 min-w-56 overflow-hidden rounded-lg border border-stone-200 bg-white shadow-lg"
+        >
+          <div className="flex items-center gap-2 border-b border-stone-200 px-2.5">
+            <Search className="size-4 shrink-0 text-stone-400" />
+            <input
+              autoFocus
+              aria-label={`Search ${label.toLowerCase()}`}
+              autoComplete="off"
+              value={query}
+              placeholder={`Search ${label.toLowerCase()}…`}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setActive(0);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "ArrowDown") {
+                  event.preventDefault();
+                  setActive((index) => Math.min(index + 1, choices.length - 1));
+                } else if (event.key === "ArrowUp") {
+                  event.preventDefault();
+                  setActive((index) => Math.max(index - 1, 0));
+                } else if (event.key === "Enter") {
+                  // Enter picks; it must not send the whole order.
+                  event.preventDefault();
+                  pick(choices[active]);
+                } else if (event.key === "Escape") {
+                  setOpen(false);
+                }
+              }}
+              className="h-9 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-stone-400"
+            />
+          </div>
+          <ul role="listbox" className="max-h-60 overflow-y-auto py-1">
+            {choices.length === 0 && (
+              <li className="px-3 py-2 text-sm text-stone-500">{emptyText}</li>
+            )}
+            {choices.map((choice, index) => (
+              <li
+                key={choice === custom ? "\u0000custom" : choice}
+                role="option"
+                aria-selected={index === active}
+                onMouseEnter={() => setActive(index)}
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  pick(choice);
+                }}
+                className={
+                  "flex cursor-pointer items-center gap-2 px-3 py-1.5 text-sm " +
+                  (index === active ? "bg-brand-50" : "") +
+                  (choice === value ? " font-bold text-brand" : "")
+                }
+              >
+                {choice === custom ? (
+                  <>
+                    <Plus className="size-3.5 text-brand" /> Use “{choice}”
+                  </>
+                ) : (
+                  choice
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// A box to type in that also offers saved lines to pick from.
+function SuggestInput({
+  icon,
+  name,
+  label,
+  value,
+  options,
+  placeholder,
+  onChange,
+}: {
+  icon: typeof User;
+  name: string;
+  label: string;
+  value: string;
+  options: string[];
+  placeholder: string;
+  onChange: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(-1);
+  const input = useRef<HTMLInputElement>(null);
+  const words = value.trim().toLowerCase();
+  // Everything while the box is empty or already holds a saved line;
+  // otherwise only the saved lines that match what is typed.
+  const exact = options.some((option) => option.toLowerCase() === words);
+  const matches =
+    words && !exact ? options.filter((option) => option.toLowerCase().includes(words)) : options;
+  const shown = open && matches.length > 0;
+
+  const pick = (choice: string) => {
+    onChange(choice);
+    setOpen(false);
+  };
+
+  return (
+    <div className="relative">
+      <IconBox icon={icon}>
+        <span className="relative flex min-w-0 flex-1">
+          <input
+            ref={input}
+            name={name}
+            role="combobox"
+            aria-label={label}
+            aria-expanded={shown}
+            aria-controls={`${name}-options`}
+            autoComplete="off"
+            value={value}
+            placeholder={placeholder}
+            onFocus={() => {
+              setActive(-1);
+              setOpen(true);
+            }}
+            onBlur={() => setOpen(false)}
+            onChange={(event) => {
+              onChange(event.target.value);
+              setActive(-1);
+              setOpen(true);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "ArrowDown") {
+                event.preventDefault();
+                setOpen(true);
+                setActive((index) => Math.min(index + 1, matches.length - 1));
+              } else if (event.key === "ArrowUp") {
+                event.preventDefault();
+                setActive((index) => Math.max(index - 1, -1));
+              } else if (event.key === "Enter" && shown && active >= 0) {
+                event.preventDefault();
+                pick(matches[active]);
+              } else if (event.key === "Escape") {
+                setOpen(false);
+              }
+            }}
+            className={inside + " pr-9"}
+          />
+          <button
+            type="button"
+            tabIndex={-1}
+            aria-label={`Saved ${label.toLowerCase()}s`}
+            // Keeps the box focused so the list can open under it.
+            onMouseDown={(event) => {
+              event.preventDefault();
+              input.current?.focus();
+              setActive(-1);
+              setOpen(!shown);
+            }}
+            className="absolute inset-y-0 right-0 flex w-9 cursor-pointer items-center justify-center text-stone-700"
+          >
+            <ChevronDown className="size-4" />
+          </button>
+        </span>
+      </IconBox>
+      {shown && (
+        <ul
+          id={`${name}-options`}
+          role="listbox"
+          className="absolute inset-x-0 top-full z-30 mt-1 max-h-60 overflow-y-auto rounded-lg border border-stone-200 bg-white py-1 shadow-lg"
+        >
+          {matches.map((option, index) => (
+            <li
+              key={option}
+              role="option"
+              aria-selected={index === active}
+              onMouseEnter={() => setActive(index)}
+              onMouseDown={(event) => {
+                event.preventDefault();
+                pick(option);
+              }}
+              className={
+                "cursor-pointer px-3 py-1.5 text-sm " + (index === active ? "bg-brand-50" : "")
+              }
+            >
+              {option}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 /* ---------- Product search box ---------- */
 
 function ProductPicker({
@@ -337,6 +603,8 @@ type Draft = {
   cod: string;
   instruction: string;
   notes: string;
+  // Only kept when a day other than today was picked.
+  orderDate?: string;
 };
 
 function readDraft(): Draft | null {
@@ -376,8 +644,28 @@ const never = () => () => {};
 type Props = {
   products: OrderProduct[];
   currency: string;
+  timezone: string;
+  // Lines offered under "Instruction": the usual one, then ones used before.
+  instructions: string[];
+  // The number after the last FO ref used, as a hint of what comes next.
+  nextRef: string;
+  // The title of the screen; the order date sits beside it.
+  header: React.ReactNode;
   defaults: { name: string; phone: string; conversationId: string; source: string };
 };
+
+const REF_PREFIX = "FO";
+
+// Today's date where the business is, as 2026-11-27.
+const todayIn = (timezone: string) =>
+  new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+
+type RefNote = NonNullable<Awaited<ReturnType<typeof watchShipperRef>>>;
 
 /* ---------- The form ---------- */
 
@@ -388,10 +676,25 @@ export function OrderForm(props: Props) {
     () => true,
     () => false,
   );
-  return inBrowser ? <Editor {...props} /> : <div className="card h-96 animate-pulse" />;
+  return inBrowser ? (
+    <Editor {...props} />
+  ) : (
+    <div className="space-y-4">
+      {props.header}
+      <div className="card h-96 animate-pulse" />
+    </div>
+  );
 }
 
-function Editor({ products, currency, defaults }: Props) {
+function Editor({
+  products,
+  currency,
+  timezone,
+  instructions,
+  nextRef,
+  header,
+  defaults,
+}: Props) {
   const router = useRouter();
   // An order started from a chat begins with that customer, not an old draft.
   const fromChat = !!(defaults.conversationId || defaults.name || defaults.phone);
@@ -401,7 +704,13 @@ function Editor({ products, currency, defaults }: Props) {
   const [customer, setCustomer] = useState<Customer>(
     draft?.customer ?? noCustomer(defaults.name, defaults.phone),
   );
-  const [shipperRef, setShipperRef] = useState(draft?.shipperRef ?? "");
+  // Only the number is typed; "FO" always goes in front of it.
+  const [shipperRef, setShipperRef] = useState((draft?.shipperRef ?? "").replace(/\D/g, ""));
+  const fullRef = shipperRef ? REF_PREFIX + shipperRef : "";
+  const [refNote, setRefNote] = useState<RefNote | null>(null);
+  const [today] = useState(() => todayIn(timezone));
+  // Empty means today.
+  const [orderDate, setOrderDate] = useState(draft?.orderDate ?? "");
   const [shippingFee, setShippingFee] = useState(draft?.shippingFee ?? "");
   const [cod, setCod] = useState(draft?.cod ?? "");
   const [instruction, setInstruction] = useState(draft?.instruction ?? "");
@@ -418,14 +727,56 @@ function Editor({ products, currency, defaults }: Props) {
   useEffect(() => {
     if (fromChat) return;
     writeDraft(
-      touched ? { rows, customer, shipperRef, shippingFee, cod, instruction, notes } : null,
+      touched
+        ? { rows, customer, shipperRef, shippingFee, cod, instruction, notes, orderDate }
+        : null,
     );
-  }, [fromChat, touched, rows, customer, shipperRef, shippingFee, cod, instruction, notes]);
+  }, [
+    fromChat,
+    touched,
+    rows,
+    customer,
+    shipperRef,
+    shippingFee,
+    cod,
+    instruction,
+    notes,
+    orderDate,
+  ]);
+
+  // While a shipper ref is in the box, keep asking the system about it: is
+  // it already on an order, and is someone else typing the same one? Asking
+  // also tells the system that this person is working on it.
+  useEffect(() => {
+    if (!fullRef) return;
+    let stopped = false;
+    const ask = async () => {
+      try {
+        const note = await watchShipperRef(fullRef);
+        if (!stopped) setRefNote(note);
+      } catch {
+        // Offline for a moment; the next round will catch up.
+      }
+    };
+    const first = setTimeout(ask, 400);
+    const again = setInterval(() => {
+      if (document.visibilityState === "visible") ask();
+    }, 8000);
+    return () => {
+      stopped = true;
+      clearTimeout(first);
+      clearInterval(again);
+    };
+  }, [fullRef]);
+  const refNow = refNote && refNote.ref === fullRef ? refNote : null;
 
   const startOver = () => {
+    if (fullRef) void releaseShipperRef().catch(() => {});
     setRows([blank(0)]);
     setCustomer(noCustomer());
     setShipperRef("");
+    setRefNote(null);
+    setOrderDate("");
     setShippingFee("");
     setCod("");
     setInstruction("");
@@ -547,7 +898,7 @@ function Editor({ products, currency, defaults }: Props) {
   const total = subtotal + delivery;
   // The COD follows the total until someone types a different amount.
   const codAmount = cod.trim() === "" ? total : Number(cod);
-  const codWrong = !Number.isFinite(codAmount) || codAmount < 0 || codAmount > total + 0.005;
+  const codWrong = !Number.isFinite(codAmount) || codAmount < 0;
 
   const hold = blocked
     ? "Fix the item marked in red before creating the order."
@@ -560,8 +911,12 @@ function Editor({ products, currency, defaults }: Props) {
           : !customer.country || !customer.city || !customer.area
             ? "Choose the country, city and area."
             : codWrong
-              ? "The COD amount can't be more than the order total."
-              : null;
+              ? "Enter the COD amount as a number."
+              : refNow?.usedBy
+                ? `${fullRef} is already used on Order #${refNow.usedBy.number}.`
+                : orderDate > today
+                  ? "The order date can't be in the future."
+                  : null;
 
   const findCustomer = () =>
     startLookup(async () => {
@@ -583,7 +938,7 @@ function Editor({ products, currency, defaults }: Props) {
 
   const inUae = customer.country === DEFAULT_COUNTRY;
   const set = (change: Partial<Customer>) => setCustomer((current) => ({ ...current, ...change }));
-  const sectionHead = "flex items-center gap-2.5 bg-brand-50 px-4 py-3";
+  const sectionHead = "flex items-center gap-2.5 rounded-t-xl bg-brand-50 px-4 py-3";
   const th = "px-2 py-2.5 text-left text-[13px] font-semibold text-stone-800";
   const columns =
     "grid items-center gap-x-3 gap-y-2 md:grid-cols-[1.75rem_minmax(11rem,2fr)_minmax(10.5rem,1.4fr)_minmax(7rem,0.9fr)_8rem_minmax(7rem,1fr)_minmax(7rem,1fr)_2.5rem]";
@@ -598,6 +953,25 @@ function Editor({ products, currency, defaults }: Props) {
         startTransition(() => run(data));
       }}
     >
+      <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
+        {header}
+        <label className="block w-full sm:w-52" data-order-date>
+          <Label>Order Date</Label>
+          <IconBox icon={CalendarDays} className={orderDate > today ? "border-rose-500" : ""}>
+            <input
+              type="date"
+              aria-label="Order Date"
+              value={orderDate || today}
+              max={today}
+              onChange={(event) =>
+                setOrderDate(event.target.value === today ? "" : event.target.value)
+              }
+              className={inside + " font-semibold"}
+            />
+          </IconBox>
+        </label>
+      </div>
+
       {restored && (
         <p className="card flex flex-wrap items-center gap-2 border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
           You have an unfinished order from before. It&apos;s all still here.
@@ -613,6 +987,8 @@ function Editor({ products, currency, defaults }: Props) {
       <input type="hidden" name="city" value={customer.city} />
       <input type="hidden" name="area" value={customer.area} />
       <input type="hidden" name="cod" value={codWrong ? "" : codAmount.toFixed(2)} />
+      <input type="hidden" name="shipperRef" value={fullRef} />
+      <input type="hidden" name="orderDate" value={orderDate} />
       <input
         type="hidden"
         name="items"
@@ -626,7 +1002,7 @@ function Editor({ products, currency, defaults }: Props) {
       />
 
       {/* ---------- Customer & shipping ---------- */}
-      <section className="card overflow-hidden" data-customer>
+      <section className="card" data-customer>
         <header className={sectionHead}>
           <UserRound className="size-5 text-brand" strokeWidth={2} />
           <h2 className="text-base font-bold">Customer &amp; Shipping Details</h2>
@@ -635,15 +1011,45 @@ function Editor({ products, currency, defaults }: Props) {
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <label className="block">
               <Label>Shipper Ref</Label>
-              <IconBox icon={Hash}>
+              <IconBox
+                icon={Hash}
+                className={refNow?.usedBy ? "border-rose-500" : ""}
+              >
+                <span className="flex items-center border-r border-stone-200 bg-stone-100 px-2.5 text-sm font-bold text-stone-700">
+                  {REF_PREFIX}
+                </span>
                 <input
-                  name="shipperRef"
+                  aria-label="Shipper Ref"
+                  inputMode="numeric"
+                  autoComplete="off"
                   value={shipperRef}
-                  onChange={(event) => setShipperRef(event.target.value)}
-                  placeholder="Enter shipper reference"
-                  className={inside}
+                  onChange={(event) =>
+                    setShipperRef(event.target.value.replace(/\D/g, "").slice(0, 12))
+                  }
+                  placeholder={nextRef}
+                  className={inside + " font-semibold"}
                 />
               </IconBox>
+              {refNow?.usedBy && (
+                <span data-ref-used className="mt-1 block text-xs font-semibold text-rose-700">
+                  {fullRef} is already used on{" "}
+                  <Link href={`/orders/${refNow.usedBy.id}`} className="underline">
+                    Order #{refNow.usedBy.number}
+                  </Link>
+                  .
+                </span>
+              )}
+              {refNow && !refNow.usedBy && refNow.others.length > 0 && (
+                <span
+                  data-ref-others
+                  role="alert"
+                  className="mt-1 block rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-900"
+                >
+                  {refNow.others.join(" and ")} {refNow.others.length === 1 ? "is" : "are"} also
+                  filling an order with {fullRef} right now. Check with{" "}
+                  {refNow.others.length === 1 ? "them" : "each other"} who is doing it.
+                </span>
+              )}
             </label>
             <label className="block">
               <Label required>Receiver Name</Label>
@@ -709,22 +1115,22 @@ function Editor({ products, currency, defaults }: Props) {
                 {cod.trim() === ""
                   ? "Follows the order total. Type 0 if it is already paid."
                   : codWrong
-                    ? "Can't be more than the order total."
+                    ? "Enter a number."
                     : `Collect ${formatMoney(codAmount, currency)} on delivery.`}
               </span>
             </label>
-            <label className="block">
+            <div>
               <Label>Instruction</Label>
-              <IconBox icon={Quote}>
-                <input
-                  name="instruction"
-                  value={instruction}
-                  onChange={(event) => setInstruction(event.target.value)}
-                  placeholder="Delivery / Order Instruction"
-                  className={inside}
-                />
-              </IconBox>
-            </label>
+              <SuggestInput
+                icon={Quote}
+                name="instruction"
+                label="Instruction"
+                value={instruction}
+                options={instructions}
+                placeholder="Pick a saved one or type your own"
+                onChange={setInstruction}
+              />
+            </div>
             <label className="block sm:col-span-2 lg:col-span-1">
               <Label>Description</Label>
               <IconBox icon={Quote}>
@@ -772,18 +1178,34 @@ function Editor({ products, currency, defaults }: Props) {
                 />
               </IconBox>
             </label>
-            <label className="block">
+            <div>
               <Label required>Area</Label>
-              <IconBox icon={MapPin}>
-                <PlaceField
+              {inUae ? (
+                <SearchSelect
+                  icon={MapPin}
                   label="Area"
                   placeholder="Choose Area"
                   value={customer.area}
-                  options={inUae ? (UAE_AREAS[customer.city] ?? []) : null}
+                  options={UAE_AREAS[customer.city] ?? []}
+                  emptyText={
+                    customer.city
+                      ? "No area matches. Type its name to add it."
+                      : "Choose the city first, or type the area's name."
+                  }
                   onChange={(area) => set({ area })}
                 />
-              </IconBox>
-            </label>
+              ) : (
+                <IconBox icon={MapPin}>
+                  <PlaceField
+                    label="Area"
+                    placeholder="Choose Area"
+                    value={customer.area}
+                    options={null}
+                    onChange={(area) => set({ area })}
+                  />
+                </IconBox>
+              )}
+            </div>
             <label className="block">
               <Label>Street Address</Label>
               <IconBox icon={Building2}>
