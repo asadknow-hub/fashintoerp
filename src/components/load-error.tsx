@@ -16,7 +16,9 @@ export function LoadError({ error, retry }: { error: unknown; retry: () => void 
   useEffect(() => {
     console.error(error);
     const now = Date.now();
-    triedAt = triedAt.filter((time) => now - time < 30_000);
+    // Counted over a few minutes, because one failed try can itself take a
+    // long time when the database is not answering.
+    triedAt = triedAt.filter((time) => now - time < 180_000);
     if (triedAt.length >= 2) {
       const stop = setTimeout(() => setWaiting(false), 0);
       return () => clearTimeout(stop);
