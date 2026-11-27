@@ -61,18 +61,6 @@ function readOrderDate(form: FormData, timezone: string) {
   return { date: typed };
 }
 
-// True when this order's pieces already came back through an exchange (the
-// exchange was delivered and its old items were marked received). Returning
-// or cancelling the order afterwards must not add them to stock again.
-async function alreadyBack(tx: Tx, orderId: string) {
-  const [exchange] = await tx
-    .select({ id: orders.id })
-    .from(orders)
-    .where(and(eq(orders.exchangeOfId, orderId), eq(orders.oldItemsReceived, true)))
-    .limit(1);
-  return exchange !== undefined;
-}
-
 // One shipper ref belongs to one order. Taking a lock on the ref first means
 // two people saving the same one at the same moment can't both get through.
 async function refuseUsedRef(tx: Tx, ref: string, exceptOrderId?: string) {
@@ -185,12 +173,16 @@ export async function createOrder(
   try {
     orderId = await db.transaction(async (tx) => {
       await refuseUsedRef(tx, shipperRef);
+      // An exchange goes out with the same delivery company as the order
+      // it replaces, unless another one is picked later.
+      let exchangeCompany: string | null = null;
       if (exchangeOf) {
         const [original] = await tx
-          .select({ id: orders.id })
+          .select({ id: orders.id, companyId: orders.deliveryCompanyId })
           .from(orders)
           .where(eq(orders.id, exchangeOf));
         if (!original) throw new StockError("The order being exchanged was not found.");
+        exchangeCompany = original.companyId;
       }
       // Check stock first (and hold it) so a refused order never uses up
       // an order number.
@@ -268,6 +260,7 @@ export async function createOrder(
           notes: optional(form, "notes"),
           trackingNumber: shipperRef,
           exchangeOfId: exchangeOf || null,
+          deliveryCompanyId: exchangeCompany,
           createdBy: user.id,
           ...(createdAt && { createdAt }),
         })
@@ -308,18 +301,18 @@ export async function createOrder(
   return { go: `/orders/${orderId}` };
 }
 
-const statuses = orders.status.enumValues;
+type Status = (typeof orders.status.enumValues)[number];
 
 // The step dates that go with a status: reaching a step keeps the date it
 // was first reached, and going back clears the dates of the steps undone.
-const steps: Partial<Record<(typeof statuses)[number], number>> = {
+const steps: Partial<Record<Status, number>> = {
   new: 0,
   confirmed: 1,
   packed: 1,
   shipped: 2,
   delivered: 3,
 };
-function stamps(status: (typeof statuses)[number]) {
+function stamps(status: Status) {
   const step = steps[status];
   // A cancelled or returned order keeps the dates of what happened before.
   if (step === undefined) return {};
@@ -331,15 +324,33 @@ function stamps(status: (typeof statuses)[number]) {
 }
 const closed = ["cancelled", "returned"];
 
-export async function updateOrder(
+// "Save Note" on the order page.
+export async function saveOrderNote(
   orderId: string,
   _state: ActionState,
   form: FormData,
 ): Promise<ActionState> {
-  const user = await requireUser();
-  const status = text(form, "status") as (typeof statuses)[number];
-  if (!statuses.includes(status)) return { error: "Choose a status." };
-  const typedRef = optional(form, "trackingNumber");
+  await requireUser();
+  if (!isUuid(orderId)) return { error: "Order not found." };
+  await db
+    .update(orders)
+    .set({ notes: optional(form, "notes") })
+    .where(eq(orders.id, orderId));
+  refresh();
+  return { ok: "Note saved." };
+}
+
+// The pencil on the order page: its date and its FO number.
+export async function editOrder(
+  orderId: string,
+  _state: ActionState,
+  form: FormData,
+): Promise<ActionState> {
+  await requireUser();
+  if (!isUuid(orderId)) return { error: "Order not found." };
+  const ref = cleanRef(text(form, "ref"));
+  if (!ref) return { error: "An order must have an FO number." };
+  if (!/^FO\d{1,12}$/.test(ref)) return { error: "The FO number is FO followed by its number." };
   const { timezone } = await getPrefs();
   const picked = readOrderDate(form, timezone);
   if ("error" in picked) return { error: picked.error };
@@ -347,54 +358,16 @@ export async function updateOrder(
   try {
     await db.transaction(async (tx) => {
       const [order] = await tx
-        .select({
-          status: orders.status,
-          number: orders.number,
-          trackingNumber: orders.trackingNumber,
-        })
+        .select({ ref: orders.trackingNumber })
         .from(orders)
         .where(eq(orders.id, orderId))
         .for("update");
       if (!order) throw new StockError("Order not found.");
-      if (order.trackingNumber && !typedRef) {
-        throw new StockError("An order must keep an FO number.");
-      }
-      if (typedRef && cleanRef(typedRef) !== cleanRef(order.trackingNumber ?? "")) {
-        await refuseUsedRef(tx, cleanRef(typedRef), orderId);
-      }
-      if (closed.includes(order.status) && order.status !== status) {
-        throw new StockError(
-          `This order is ${order.status} and its stock was put back. Create a new order instead.`,
-        );
-      }
-
-      // Cancelling or returning puts the items back on the shelf.
-      if (closed.includes(status) && order.status !== status && !(await alreadyBack(tx, orderId))) {
-        const items = await tx
-          .select()
-          .from(orderItems)
-          .where(eq(orderItems.orderId, orderId));
-        for (const item of items) {
-          await changeStock(tx, {
-            variantId: item.variantId,
-            change: item.quantity,
-            reason: status === "returned" ? "return" : "cancelled",
-            note: `Order ${orderName(order.trackingNumber, order.number)}`,
-            orderId,
-            userId: user.id,
-          });
-        }
-      }
-
+      if (ref !== cleanRef(order.ref ?? "")) await refuseUsedRef(tx, ref, orderId);
       await tx
         .update(orders)
         .set({
-          status,
-          ...stamps(status),
-          ...(status === "returned" &&
-            order.status !== "returned" && { returnedAt: sql`now()` }),
-          trackingNumber: typedRef ? cleanRef(typedRef) : null,
-          notes: optional(form, "notes"),
+          trackingNumber: ref,
           // A changed date keeps the order's time of day.
           ...(picked.date && {
             createdAt: sql`((${picked.date}::date + (${orders.createdAt} at time zone ${timezone})::time) at time zone ${timezone})`,
@@ -404,7 +377,7 @@ export async function updateOrder(
     });
   } catch (err) {
     if (err instanceof StockError) return { error: err.message };
-    if (isDuplicate(err)) return { error: "That FO number is already used on another order." };
+    if (isDuplicate(err)) return { error: `${ref} is already used on another order.` };
     throw err;
   }
   refresh();
@@ -504,7 +477,7 @@ export async function setOrderProgress(
   _state: ActionState,
   form: FormData,
 ): Promise<ActionState> {
-  const user = await requireUser();
+  await requireUser();
   if (!isUuid(orderId)) return { error: "Order not found." };
   // A later step means the earlier ones happened too.
   const delivered = form.get("delivered") === "on";
@@ -520,13 +493,7 @@ export async function setOrderProgress(
   try {
     await db.transaction(async (tx) => {
       const [order] = await tx
-        .select({
-          status: orders.status,
-          number: orders.number,
-          ref: orders.trackingNumber,
-          exchangeOfId: orders.exchangeOfId,
-          oldItemsReceived: orders.oldItemsReceived,
-        })
+        .select({ status: orders.status })
         .from(orders)
         .where(eq(orders.id, orderId))
         .for("update");
@@ -535,41 +502,6 @@ export async function setOrderProgress(
         throw new StockError(`This order is ${order.status}, so its steps can't be changed.`);
       }
 
-      // An exchange that has been delivered: did the old pieces come back?
-      // Only a "yes" puts them back into stock, and only the first time.
-      const oldItems = text(form, "oldItems");
-      let received: { oldItemsReceived: boolean; oldItemsReceivedAt: ReturnType<typeof sql> | null } | null =
-        null;
-      if (delivered && order.exchangeOfId && order.oldItemsReceived !== true) {
-        if (oldItems === "received") {
-          const [first] = await tx
-            .select({ id: orders.id, status: orders.status })
-            .from(orders)
-            .where(eq(orders.id, order.exchangeOfId))
-            .for("update");
-          // A first order that was itself returned or cancelled already
-          // gave its pieces back.
-          if (first && !closed.includes(first.status)) {
-            const items = await tx
-              .select()
-              .from(orderItems)
-              .where(eq(orderItems.orderId, first.id));
-            for (const item of items) {
-              await changeStock(tx, {
-                variantId: item.variantId,
-                change: item.quantity,
-                reason: "return",
-                note: `Exchange ${orderName(order.ref, order.number)}: old items received back`,
-                orderId: first.id,
-                userId: user.id,
-              });
-            }
-          }
-          received = { oldItemsReceived: true, oldItemsReceivedAt: sql`now()` };
-        } else if (oldItems === "not") {
-          received = { oldItemsReceived: false, oldItemsReceivedAt: null };
-        }
-      }
       if (portal) {
         const [company] = await tx
           .select({ id: deliveryCompanies.id })
@@ -585,7 +517,6 @@ export async function setOrderProgress(
           ...stamps(status),
           deliveryCompanyId: portal ? companyId : null,
           deliveryCharge: charge,
-          ...received,
         })
         .where(eq(orders.id, orderId));
     });
@@ -597,49 +528,115 @@ export async function setOrderProgress(
   return { ok: "Saved." };
 }
 
-// "Create Return" in an order's Actions: the order becomes a return, its
-// items go back into stock, and what the customer agreed to pay towards the
-// delivery cost (if anything) is kept with it.
-export async function createReturn(
+// The dates set while an order is on its way: is the parcel out of the
+// building (handed to the delivery company)?
+const isOut = (order: { dispatchedAt: Date | null }) => order.dispatchedAt !== null;
+
+// "Cancel Order". Before the parcel was handed over, its pieces never left
+// and go straight back into stock. After that it is on its way back with the
+// driver: each piece is put back (or thrown away) on the order page once it
+// has arrived. The delivery company bills a cancellation only when the
+// customer opened the parcel first; that amount comes off the payout.
+export async function cancelOrder(
   orderId: string,
   _state: ActionState,
   form: FormData,
 ): Promise<ActionState> {
   const user = await requireUser();
   if (!isUuid(orderId)) return { error: "Order not found." };
-  const covers = form.get("customerPays") === "on";
-  const fee = covers ? amount(form, "returnFee") : null;
-  if (covers && (text(form, "returnFee") === "" || fee === null)) {
-    return { error: "Enter how much of the delivery cost the customer is covering." };
+  const opened = form.get("opened") === "on";
+  const fee = opened ? amount(form, "cancelFee") : null;
+  if (opened && (text(form, "cancelFee") === "" || fee === null)) {
+    return { error: "Enter what the delivery company charges for the opened parcel." };
   }
 
   try {
     await db.transaction(async (tx) => {
       const [order] = await tx
-        .select({ status: orders.status, number: orders.number, ref: orders.trackingNumber })
+        .select({
+          status: orders.status,
+          number: orders.number,
+          ref: orders.trackingNumber,
+          dispatchedAt: orders.dispatchedAt,
+        })
         .from(orders)
         .where(eq(orders.id, orderId))
         .for("update");
       if (!order) throw new StockError("Order not found.");
-      if (closed.includes(order.status)) {
-        throw new StockError(`This order is already ${order.status}.`);
+      if (closed.includes(order.status)) throw new StockError(`This order is already ${order.status}.`);
+      if (order.status === "delivered") {
+        throw new StockError("This order was delivered. Create a return or an exchange instead.");
       }
-      const items = (await alreadyBack(tx, orderId))
-        ? []
-        : await tx.select().from(orderItems).where(eq(orderItems.orderId, orderId));
-      for (const item of items) {
-        await changeStock(tx, {
-          variantId: item.variantId,
-          change: item.quantity,
-          reason: "return",
-          note: `Order ${orderName(order.ref, order.number)}`,
-          orderId,
-          userId: user.id,
-        });
+      if (opened && !isOut(order)) {
+        throw new StockError("The parcel has not been dispatched, so it can't have been opened.");
+      }
+      if (!isOut(order)) {
+        const items = await tx.select().from(orderItems).where(eq(orderItems.orderId, orderId));
+        for (const item of items) {
+          await changeStock(tx, {
+            variantId: item.variantId,
+            change: item.quantity,
+            reason: "cancelled",
+            note: `Order ${orderName(order.ref, order.number)}`,
+            orderId,
+            userId: user.id,
+          });
+        }
+        await tx
+          .update(orderItems)
+          .set({ backState: "stock", backAt: sql`now()` })
+          .where(eq(orderItems.orderId, orderId));
       }
       await tx
         .update(orders)
-        .set({ status: "returned", returnedAt: sql`now()`, returnFee: fee })
+        .set({ status: "cancelled", cancelledAt: sql`now()`, cancelFee: fee })
+        .where(eq(orders.id, orderId));
+    });
+  } catch (err) {
+    if (err instanceof StockError) return { error: err.message };
+    throw err;
+  }
+  refresh();
+  return { ok: "Order cancelled." };
+}
+
+// "Create Return" on a delivered order. The delivery company collects the
+// parcel from the customer: the waybill carries what the customer pays for
+// that (the usual delivery charge, or less if they argued), and the company
+// bills its charge for the trip. The pieces go back into stock one by one on
+// the order page, once they have arrived.
+export async function createReturn(
+  orderId: string,
+  _state: ActionState,
+  form: FormData,
+): Promise<ActionState> {
+  await requireUser();
+  if (!isUuid(orderId)) return { error: "Order not found." };
+  const covers = form.get("customerPays") === "on";
+  const fee = covers ? amount(form, "returnFee") : "0.00";
+  if (covers && (text(form, "returnFee") === "" || fee === null)) {
+    return { error: "Enter how much of the delivery cost the customer is covering." };
+  }
+  const charge = amount(form, "returnCharge");
+  if (text(form, "returnCharge") === "" || charge === null) {
+    return { error: "Enter what the delivery company charges for collecting the return." };
+  }
+
+  try {
+    await db.transaction(async (tx) => {
+      const [order] = await tx
+        .select({ status: orders.status })
+        .from(orders)
+        .where(eq(orders.id, orderId))
+        .for("update");
+      if (!order) throw new StockError("Order not found.");
+      if (closed.includes(order.status)) throw new StockError(`This order is already ${order.status}.`);
+      if (order.status !== "delivered") {
+        throw new StockError("Only a delivered order can be returned. Cancel this one instead.");
+      }
+      await tx
+        .update(orders)
+        .set({ status: "returned", returnedAt: sql`now()`, returnFee: fee, returnCharge: charge })
         .where(eq(orders.id, orderId));
     });
   } catch (err) {
@@ -648,4 +645,82 @@ export async function createReturn(
   }
   refresh();
   return { ok: "Return created." };
+}
+
+// What happened to a piece that was on its way back, picked on the order
+// page once it arrived: put back into stock, thrown away, or not coming back
+// after all. "Back into stock" and "thrown away" are final, so a piece can
+// never be counted in twice.
+export async function settleItem(
+  itemId: string,
+  state: "stock" | "discarded" | "none" | "waiting",
+): Promise<ActionState> {
+  const user = await requireUser();
+  if (!isUuid(itemId)) return { error: "That item was not found." };
+  if (!["stock", "discarded", "none", "waiting"].includes(state)) {
+    return { error: "Choose what happened to the item." };
+  }
+
+  try {
+    await db.transaction(async (tx) => {
+      const [item] = await tx
+        .select()
+        .from(orderItems)
+        .where(eq(orderItems.id, itemId))
+        .for("update");
+      if (!item) throw new StockError("That item was not found.");
+      const [order] = await tx
+        .select({
+          id: orders.id,
+          status: orders.status,
+          number: orders.number,
+          ref: orders.trackingNumber,
+          dispatchedAt: orders.dispatchedAt,
+        })
+        .from(orders)
+        .where(eq(orders.id, item.orderId))
+        .for("update");
+      const [exchange] = await tx
+        .select({ id: orders.id })
+        .from(orders)
+        .where(eq(orders.exchangeOfId, item.orderId))
+        .limit(1);
+      // Pieces only come back from a return, a parcel refused after it was
+      // sent out, or an order that was exchanged.
+      const comingBack =
+        order.status === "returned" ||
+        (order.status === "cancelled" && isOut(order)) ||
+        exchange !== undefined;
+      if (!comingBack) throw new StockError("Nothing is coming back from this order.");
+      if (item.backState === "stock" || item.backState === "discarded") {
+        throw new StockError(
+          item.backState === "stock"
+            ? "This item was already put back into stock."
+            : "This item was already marked as discarded.",
+        );
+      }
+      if (state === "stock") {
+        await changeStock(tx, {
+          variantId: item.variantId,
+          change: item.quantity,
+          reason: order.status === "cancelled" ? "cancelled" : "return",
+          note: `Order ${orderName(order.ref, order.number)}: received back`,
+          orderId: order.id,
+          userId: user.id,
+        });
+      }
+      await tx
+        .update(orderItems)
+        .set({
+          backState: state === "waiting" ? null : state,
+          backAt: state === "waiting" ? null : sql`now()`,
+        })
+        .where(eq(orderItems.id, itemId));
+    });
+  } catch (err) {
+    if (err instanceof StockError) return { error: err.message };
+    throw err;
+  }
+  refresh();
+  return { ok: "Saved." };
 }

@@ -287,6 +287,9 @@ export const deliveryCompanies = pgTable("delivery_companies", {
   id: id(),
   name: text("name").notNull(),
   rate: money("rate").notNull().default("0"),
+  // What the company bills when a customer opens the parcel and then
+  // refuses it.
+  openedFee: money("opened_fee").notNull().default("10"),
   active: boolean("active").notNull().default(true),
   createdAt: createdAt(),
 }).enableRLS();
@@ -326,18 +329,19 @@ export const orders = pgTable(
     dispatchedAt: timestamp("dispatched_at", { withTimezone: true }),
     deliveredAt: timestamp("delivered_at", { withTimezone: true }),
     deliveryCharge: money("delivery_charge"),
-    // A return: when it was made, and what the customer agreed to pay
-    // towards the delivery cost (empty if they are not covering it).
+    // A return (after delivery): when it was made, what the customer pays
+    // on the return waybill, and what the delivery company charges for the
+    // trip. Whatever the customer does not cover comes off the payout.
     returnedAt: timestamp("returned_at", { withTimezone: true }),
     returnFee: money("return_fee"),
+    returnCharge: money("return_charge"),
+    // A cancellation: when, and what the delivery company charged for it
+    // (they charge when the customer opened the parcel before refusing it).
+    cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+    cancelFee: money("cancel_fee"),
     // Set on an order that replaces another one: the order it is an
     // exchange for.
     exchangeOfId: uuid("exchange_of_id"),
-    // For an exchange, once it is delivered: did the pieces of the order it
-    // replaces come back? Empty until answered. Saying yes puts those pieces
-    // back into stock, once.
-    oldItemsReceived: boolean("old_items_received"),
-    oldItemsReceivedAt: timestamp("old_items_received_at", { withTimezone: true }),
     shippingFee: money("shipping_fee").notNull().default("0"),
     discount: money("discount").notNull().default("0"),
     total: money("total").notNull().default("0"),
@@ -386,6 +390,12 @@ export const orderItems = pgTable(
     // Taken off this line by a multi-piece price, so the line comes to
     // quantity × unit price − discount.
     discount: money("discount").notNull().default("0"),
+    // For pieces that are on their way back (a return, an exchange, a parcel
+    // refused at the door): what happened to them once they arrived.
+    // Empty = not here yet, "stock" = put back into stock, "discarded" =
+    // thrown away, "none" = not coming back.
+    backState: text("back_state"),
+    backAt: timestamp("back_at", { withTimezone: true }),
   },
   (t) => [index("order_items_order_idx").on(t.orderId)],
 ).enableRLS();

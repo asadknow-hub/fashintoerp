@@ -165,7 +165,9 @@ export default async function ProductPage({ params }: PageProps<"/inventory/[id]
       select coalesce(sum(s.share), 0) as revenue
       from (${itemShares}) s
       join variants v on v.id = s.variant_id
-      where v.product_id = ${id} and s.status not in ('cancelled', 'returned')`),
+      where v.product_id = ${id}
+        and s.status not in ('cancelled', 'returned')
+        and s.exchange_of_id is null`),
     db
       .selectDistinct({ category: products.category })
       .from(products)

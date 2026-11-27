@@ -18,7 +18,12 @@ export default async function SettingsPage() {
   const [business, companies, [me]] = await Promise.all([
     getSettings(),
     db
-      .select({ id: deliveryCompanies.id, name: deliveryCompanies.name, rate: deliveryCompanies.rate })
+      .select({
+        id: deliveryCompanies.id,
+        name: deliveryCompanies.name,
+        rate: deliveryCompanies.rate,
+        openedFee: deliveryCompanies.openedFee,
+      })
       .from(deliveryCompanies)
       .where(eq(deliveryCompanies.active, true))
       .orderBy(asc(deliveryCompanies.name)),
@@ -162,11 +167,16 @@ export default async function SettingsPage() {
           <Companies
             canEdit={owner}
             currency={CURRENCY}
-            companies={companies.map((company) => ({ ...company, rate: Number(company.rate) }))}
+            companies={companies.map((company) => ({
+              ...company,
+              rate: Number(company.rate),
+              openedFee: Number(company.openedFee),
+            }))}
           />
           <p className="text-xs text-stone-500">
             The delivery charge is what the company usually bills you for one order. It is asked
-            again when an order is marked delivered, since some areas cost more.
+            again when an order is marked delivered, since some areas cost more. &quot;Opened&quot;
+            is what they bill when a customer opens the parcel and then refuses it.
           </p>
         </section>
 

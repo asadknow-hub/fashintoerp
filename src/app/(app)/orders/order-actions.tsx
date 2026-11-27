@@ -1,12 +1,14 @@
 "use client";
 
-import { ArrowLeft, ListChecks, Repeat, Undo2 } from "lucide-react";
+import { ArrowLeft, Ban, ListChecks, Repeat, Undo2 } from "lucide-react";
 import Link from "next/link";
 import { startTransition, useActionState, useState } from "react";
 import { Modal } from "@/components/modal";
-import { createReturn, setOrderProgress } from "./actions";
+import { cancelOrder, createReturn, setOrderProgress } from "./actions";
 
-export type Company = { id: string; name: string; rate: number };
+// A delivery company: what it usually charges for a delivery, and for a
+// parcel that was opened and then refused.
+export type Company = { id: string; name: string; rate: number; openedFee: number };
 
 // The steps an open order moves through.
 export type Stage = "new" | "portal" | "dispatched" | "delivered";
@@ -26,15 +28,6 @@ export type OrderCard = {
   contents: string;
   cod: string;
   exchange: boolean;
-  // For an exchange: the order it replaces, what was in it, and whether
-  // those pieces came back ("back" = that order was itself returned or
-  // cancelled, so they are in stock already).
-  oldItems: {
-    of: string;
-    contents: string;
-    state: "ask" | "received" | "not" | "back";
-    when: string | null;
-  } | null;
   company: string | null;
   companyId: string | null;
   // When each step was done; null if not yet.
@@ -43,6 +36,9 @@ export type OrderCard = {
   deliveredAt: string | null;
   deliveryCharge: number | null;
 };
+
+// Which part of the pop-up to open on.
+export type ActionView = "steps" | "return" | "cancel";
 
 // The "Actions" button on an order, and its pop-up.
 export function OrderActions({
@@ -95,28 +91,30 @@ export function OrderActions({
   );
 }
 
-// Tick what has happened to an order so far, or turn it into a return or an
-// exchange. `preset` opens it with the ticks already set for a step (used
-// when a card is dropped on a column of the board); nothing is saved until
-// Save is pressed.
+// Tick what has happened to an order so far, or end it: cancel it, or (once
+// delivered) turn it into a return or start an exchange. `preset` opens it
+// with the ticks already set for a step (used when a card is dropped on a
+// column of the board); nothing is saved until Save is pressed.
 export function StepsModal({
   order,
   companies,
   currency,
   preset,
+  start = "steps",
   onClose,
 }: {
   order: OrderCard;
   companies: Company[];
   currency: string;
   preset?: Stage;
+  start?: ActionView;
   onClose: () => void;
 }) {
   const [result, run, pending] = useActionState(setOrderProgress.bind(null, order.id), null);
   const [returned, sendBack, returning] = useActionState(createReturn.bind(null, order.id), null);
-  const [seen, setSeen] = useState(result);
-  const [seenReturn, setSeenReturn] = useState(returned);
-  const [view, setView] = useState<"steps" | "return">("steps");
+  const [cancelled, cancel, cancelling] = useActionState(cancelOrder.bind(null, order.id), null);
+  const [seen, setSeen] = useState({ result, returned, cancelled });
+  const [view, setView] = useState<ActionView>(start);
   const rank = { new: 0, portal: 1, dispatched: 2, delivered: 3 };
   const [portal, setPortal] = useState(preset ? rank[preset] >= 1 : order.portalAt !== null);
   const [dispatched, setDispatched] = useState(
@@ -128,33 +126,45 @@ export function StepsModal({
   const [companyId, setCompanyId] = useState(
     order.companyId ?? (companies.length === 1 ? companies[0].id : ""),
   );
-  // Empty until someone types: then it follows the chosen company's usual charge.
+  // Empty until someone types: then they follow the company's usual charges.
   const [charge, setCharge] = useState(
     order.deliveryCharge === null ? "" : String(order.deliveryCharge),
   );
-  const [oldItems, setOldItems] = useState(order.oldItems?.state === "not" ? "not" : "");
-  const [customerPays, setCustomerPays] = useState(false);
+  const [customerPays, setCustomerPays] = useState(true);
   const [returnFee, setReturnFee] = useState("");
+  const [returnCharge, setReturnCharge] = useState("");
+  const [opened, setOpened] = useState(false);
+  const [cancelFee, setCancelFee] = useState("");
 
   // Saved: the page behind already shows the change.
-  if (result !== seen) {
-    setSeen(result);
-    if (result?.ok) onClose();
-  }
-  if (returned !== seenReturn) {
-    setSeenReturn(returned);
-    if (returned?.ok) onClose();
+  if (result !== seen.result || returned !== seen.returned || cancelled !== seen.cancelled) {
+    setSeen({ result, returned, cancelled });
+    if (
+      (result !== seen.result && result?.ok) ||
+      (returned !== seen.returned && returned?.ok) ||
+      (cancelled !== seen.cancelled && cancelled?.ok)
+    ) {
+      onClose();
+    }
   }
 
   const company = companies.find((c) => c.id === companyId);
   const usual = company ? company.rate.toFixed(2) : "";
   const chargeShown = charge === "" ? usual : charge;
   const returnFeeShown = returnFee === "" ? usual : returnFee;
+  const returnChargeShown = returnCharge === "" ? usual : returnCharge;
+  const cancelFeeShown = cancelFee === "" ? (company ? company.openedFee.toFixed(2) : "10.00") : cancelFee;
+  // What a return takes off the payout: the trip, less what the customer pays.
+  const returnGap =
+    (Number(returnChargeShown) || 0) - (customerPays ? Number(returnFeeShown) || 0 : 0);
+  const out = order.stage === "dispatched";
+  const isDelivered = order.stage === "delivered";
 
   const row = "flex items-start gap-3 rounded-lg border border-stone-200 px-3 py-2.5";
   const box = "mt-0.5 size-4 cursor-pointer accent-[#5b4fd9]";
   const when = (text: string | null) =>
     text && <span className="ml-2 text-xs font-normal text-stone-500">done {text}</span>;
+  const money = (value: number) => `${currency} ${value.toFixed(2)}`;
 
   if (view === "return") {
     return (
@@ -174,8 +184,9 @@ export function StepsModal({
         >
           <div className="space-y-3 p-4 text-sm">
             <p className="rounded-lg bg-amber-50 px-3 py-2 text-amber-900">
-              This turns the order into a return. Its items go back into your stock and it no
-              longer counts as a sale.
+              The delivery company collects the parcel from the customer and brings it back. The
+              order stops counting as a sale. Its items go back into stock when you mark them
+              received on the order.
             </p>
             <div className={row}>
               <input
@@ -192,7 +203,7 @@ export function StepsModal({
                 </label>
                 {customerPays && (
                   <label className="mt-2 block">
-                    <span className="label">How much the customer pays ({currency})</span>
+                    <span className="label">On the waybill: customer pays ({currency})</span>
                     <input
                       name="returnFee"
                       aria-label="Delivery cost the customer covers"
@@ -203,14 +214,34 @@ export function StepsModal({
                       className="input max-w-40 tabular-nums"
                     />
                     <span className="mt-1 block text-xs text-stone-500">
-                      {company
-                        ? `${company.name} usually charges ${currency} ${company.rate.toFixed(2)}. Change it if it was something else.`
-                        : "Type what was agreed."}
+                      Lower it if they argued it down.
                     </span>
                   </label>
                 )}
               </div>
             </div>
+            <label className="block">
+              <span className="label">
+                {company ? company.name : "The delivery company"} charges for the return (
+                {currency})
+              </span>
+              <input
+                name="returnCharge"
+                aria-label="Return charge"
+                inputMode="decimal"
+                value={returnChargeShown}
+                onChange={(event) => setReturnCharge(event.target.value)}
+                placeholder="0.00"
+                className="input max-w-40 tabular-nums"
+              />
+            </label>
+            <p data-return-gap className="rounded-lg bg-stone-100 px-3 py-2 font-semibold">
+              {returnGap > 0.004
+                ? `${money(returnGap)} comes off your payout.`
+                : returnGap < -0.004
+                  ? `${money(-returnGap)} is added to your payout.`
+                  : "Nothing comes off your payout."}
+            </p>
             {returned?.error && (
               <p role="alert" className="text-sm font-semibold text-rose-700">
                 {returned.error}
@@ -227,6 +258,87 @@ export function StepsModal({
               className="btn ml-auto bg-rose-600 px-5 hover:bg-rose-700"
             >
               <Undo2 className="size-4" /> {returning ? "Creating…" : "Create Return"}
+            </button>
+          </footer>
+        </form>
+      </Modal>
+    );
+  }
+
+  if (view === "cancel") {
+    return (
+      <Modal
+        title={`Cancel Order ${order.name}`}
+        subtitle={`${order.customer} — ${order.contents}`}
+        onClose={onClose}
+      >
+        <form
+          data-order-cancel
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (cancelling) return;
+            const data = new FormData(event.currentTarget);
+            startTransition(() => cancel(data));
+          }}
+        >
+          <div className="space-y-3 p-4 text-sm">
+            <p className="rounded-lg bg-amber-50 px-3 py-2 text-amber-900">
+              {out
+                ? "No money is collected and no delivery charge is taken. The parcel comes back with the driver: its items go back into stock when you mark them received on the order."
+                : "No money is collected and no delivery charge is taken. Its items go straight back into stock."}
+            </p>
+            {out && (
+              <div className={row}>
+                <input
+                  id={`opened-${order.id}`}
+                  type="checkbox"
+                  name="opened"
+                  checked={opened}
+                  onChange={(event) => setOpened(event.target.checked)}
+                  className={box}
+                />
+                <div className="min-w-0 flex-1">
+                  <label htmlFor={`opened-${order.id}`} className="cursor-pointer font-semibold">
+                    Customer opened the parcel, then cancelled
+                  </label>
+                  {opened && (
+                    <label className="mt-2 block">
+                      <span className="label">
+                        {company ? company.name : "The delivery company"} charges ({currency})
+                      </span>
+                      <input
+                        name="cancelFee"
+                        aria-label="Charge for the opened parcel"
+                        inputMode="decimal"
+                        value={cancelFeeShown}
+                        onChange={(event) => setCancelFee(event.target.value)}
+                        placeholder="0.00"
+                        className="input max-w-40 tabular-nums"
+                      />
+                      <span className="mt-1 block text-xs text-stone-500">
+                        This comes off your payout.
+                      </span>
+                    </label>
+                  )}
+                </div>
+              </div>
+            )}
+            {cancelled?.error && (
+              <p role="alert" className="text-sm font-semibold text-rose-700">
+                {cancelled.error}
+              </p>
+            )}
+          </div>
+          <footer className="flex flex-wrap items-center gap-2 border-t border-stone-200 bg-stone-50 px-4 py-3">
+            <button type="button" onClick={() => setView("steps")} className="btn-secondary">
+              <ArrowLeft className="size-4" /> Back
+            </button>
+            <button
+              type="submit"
+              disabled={cancelling}
+              className="btn ml-auto bg-rose-600 px-5 hover:bg-rose-700"
+            >
+              <Ban className="size-4" /> {cancelling ? "Cancelling…" : "Cancel Order"}
             </button>
           </footer>
         </form>
@@ -365,64 +477,37 @@ export function StepsModal({
             </div>
           </div>
 
-          {order.oldItems && delivered && (
-            <div className={row + " border-violet-200 bg-violet-50"} data-old-items>
-              <div className="min-w-0 flex-1">
-                <p className="font-semibold">Old items from Order {order.oldItems.of}</p>
-                <p className="text-xs text-stone-600">{order.oldItems.contents}</p>
-                {order.oldItems.state === "received" ? (
-                  <p className="mt-1.5 text-xs font-semibold text-emerald-700">
-                    Received back{order.oldItems.when ? ` ${order.oldItems.when}` : ""} and added
-                    to stock.
-                  </p>
-                ) : order.oldItems.state === "back" ? (
-                  <p className="mt-1.5 text-xs text-stone-600">
-                    That order was returned or cancelled, so its pieces are already back in stock.
-                  </p>
-                ) : (
-                  <div className="mt-2 space-y-1.5">
-                    <label className="flex cursor-pointer items-center gap-2">
-                      <input
-                        type="radio"
-                        name="oldItems"
-                        value="received"
-                        checked={oldItems === "received"}
-                        onChange={() => setOldItems("received")}
-                        className="size-4 accent-[#5b4fd9]"
-                      />
-                      Received back — add them to stock
-                    </label>
-                    <label className="flex cursor-pointer items-center gap-2">
-                      <input
-                        type="radio"
-                        name="oldItems"
-                        value="not"
-                        checked={oldItems === "not"}
-                        onChange={() => setOldItems("not")}
-                        className="size-4 accent-[#5b4fd9]"
-                      />
-                      Not received
-                    </label>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
           {result?.error && (
             <p role="alert" className="text-sm font-semibold text-rose-700">
               {result.error}
             </p>
           )}
 
-          <div className="grid grid-cols-2 gap-2 border-t border-stone-200 pt-3">
-            <button type="button" onClick={() => setView("return")} className="btn-secondary">
-              <Undo2 className="size-4" /> Create Return
-            </button>
-            <Link href={`/orders/new?exchange=${order.id}`} className="btn-secondary">
-              <Repeat className="size-4" /> Create Exchange
-            </Link>
-          </div>
+          {/* How an order ends: delivered ones can come back or be swapped,
+              the others can be cancelled. */}
+          {isDelivered ? (
+            <div className="grid grid-cols-2 gap-2 border-t border-stone-200 pt-3">
+              <button type="button" onClick={() => setView("return")} className="btn-secondary">
+                <Undo2 className="size-4" /> Create Return
+              </button>
+              <Link href={`/orders/new?exchange=${order.id}`} className="btn-secondary">
+                <Repeat className="size-4" /> Create Exchange
+              </Link>
+            </div>
+          ) : (
+            <div className="border-t border-stone-200 pt-3">
+              <button
+                type="button"
+                onClick={() => setView("cancel")}
+                className="btn-secondary w-full text-rose-700"
+              >
+                <Ban className="size-4" /> Cancel Order
+              </button>
+              <p className="mt-1.5 text-center text-xs text-stone-500">
+                A return or an exchange can be created once the order is delivered.
+              </p>
+            </div>
+          )}
         </div>
 
         <footer className="flex flex-wrap items-center gap-2 border-t border-stone-200 bg-stone-50 px-4 py-3">
@@ -434,7 +519,7 @@ export function StepsModal({
           </Link>
           <span className="ml-auto flex gap-2">
             <button type="button" onClick={onClose} className="btn-secondary">
-              Cancel
+              Close
             </button>
             <button type="submit" disabled={pending} className="btn px-5">
               {pending ? "Saving…" : "Save"}

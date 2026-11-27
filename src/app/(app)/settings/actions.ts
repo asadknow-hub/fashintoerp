@@ -73,7 +73,9 @@ function readCompany(form: FormData) {
   if (!name) return { error: "Enter the company's name." };
   const rate = text(form, "rate") === "" ? "0" : amount(form, "rate");
   if (rate === null) return { error: "The delivery charge must be a number." };
-  return { name, rate };
+  const openedFee = text(form, "openedFee") === "" ? "10" : amount(form, "openedFee");
+  if (openedFee === null) return { error: "The opened-parcel charge must be a number." };
+  return { name, rate, openedFee };
 }
 
 export async function addCompany(_state: ActionState, form: FormData): Promise<ActionState> {

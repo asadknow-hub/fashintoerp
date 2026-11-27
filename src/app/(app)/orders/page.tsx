@@ -128,8 +128,7 @@ export default async function OrdersPage({
         deliveryCharge: orders.deliveryCharge,
         returnFee: orders.returnFee,
         exchangeOfId: orders.exchangeOfId,
-        oldItemsReceived: orders.oldItemsReceived,
-        oldItemsReceivedAt: orders.oldItemsReceivedAt,
+        cancelFee: orders.cancelFee,
         createdAt: orders.createdAt,
         customer: customers.name,
         phone: customers.phone,
@@ -146,25 +145,12 @@ export default async function OrdersPage({
         id: deliveryCompanies.id,
         name: deliveryCompanies.name,
         rate: deliveryCompanies.rate,
+        openedFee: deliveryCompanies.openedFee,
         active: deliveryCompanies.active,
       })
       .from(deliveryCompanies)
       .orderBy(asc(deliveryCompanies.name)),
   ]);
-
-  // The orders that the exchanges on this page replace.
-  const replacedIds = rows.flatMap((row) => (row.exchangeOfId ? [row.exchangeOfId] : []));
-  const replaced = replacedIds.length
-    ? await db
-        .select({
-          id: orders.id,
-          number: orders.number,
-          ref: orders.trackingNumber,
-          status: orders.status,
-        })
-        .from(orders)
-        .where(inArray(orders.id, replacedIds))
-    : [];
 
   // What is in each order on this page: "1 M Black, 2 XL Grey" per product.
   const lines = rows.length
@@ -180,7 +166,10 @@ export default async function OrdersPage({
         .innerJoin(variants, eq(variants.id, orderItems.variantId))
         .innerJoin(products, eq(products.id, variants.productId))
         .where(
-          inArray(orderItems.orderId, [...rows.map((row) => row.id), ...replacedIds]),
+          inArray(
+            orderItems.orderId,
+            rows.map((row) => row.id),
+          ),
         )
         .orderBy(asc(products.name), asc(variants.createdAt))
     : [];
@@ -209,23 +198,6 @@ export default async function OrdersPage({
     [...(contents.get(orderId)?.products ?? [])]
       .map(([product, what]) => `${product}: ${what.join(", ")}`)
       .join(" · ");
-  const oldItemsOf = (row: (typeof rows)[number]): OrderCard["oldItems"] => {
-    const first = replaced.find((order) => order.id === row.exchangeOfId);
-    if (!first) return null;
-    return {
-      of: orderName(first.ref, first.number),
-      contents: said(first.id),
-      state:
-        row.oldItemsReceived === true
-          ? "received"
-          : first.status === "cancelled" || first.status === "returned"
-            ? "back"
-            : row.oldItemsReceived === false
-              ? "not"
-              : "ask",
-      when: when(row.oldItemsReceivedAt),
-    };
-  };
   const card = (row: (typeof rows)[number]): OrderCard => ({
     id: row.id,
     number: row.number,
@@ -237,7 +209,6 @@ export default async function OrdersPage({
     contents: said(row.id),
     cod: row.payment === "cod" ? formatMoney(row.codAmount, currency) : "Paid",
     exchange: row.exchangeOfId !== null,
-    oldItems: oldItemsOf(row),
     company: row.company,
     companyId: row.companyId,
     portalAt: when(row.portalAt),
@@ -250,7 +221,12 @@ export default async function OrdersPage({
   const companiesFor = (used: (string | null)[]) =>
     companies
       .filter((company) => company.active || used.includes(company.id))
-      .map((company) => ({ id: company.id, name: company.name, rate: Number(company.rate) }));
+      .map((company) => ({
+        id: company.id,
+        name: company.name,
+        rate: Number(company.rate),
+        openedFee: Number(company.openedFee),
+      }));
 
   const pageHref = (target: number) => {
     const query = new URLSearchParams();
@@ -519,19 +495,14 @@ export default async function OrdersPage({
                           order={card(row)}
                         />
                       )}
-                      {row.exchangeOfId && row.status === "delivered" && (
+                      {row.status === "returned" && Number(row.returnFee) > 0 && (
                         <span className="mt-1 block text-xs text-stone-500">
-                          {row.oldItemsReceived === true
-                            ? "Old items received back"
-                            : row.oldItemsReceived === false
-                              ? "Old items not received"
-                              : "Old items: not answered yet"}
+                          Customer pays {formatMoney(row.returnFee, currency)}
                         </span>
                       )}
-                      {row.status === "returned" && (
+                      {row.status === "cancelled" && row.cancelFee !== null && (
                         <span className="mt-1 block text-xs text-stone-500">
-                          {row.returnFee !== null &&
-                            `Customer pays ${formatMoney(row.returnFee, currency)}`}
+                          Opened: {formatMoney(row.cancelFee, currency)} charged
                         </span>
                       )}
                     </td>

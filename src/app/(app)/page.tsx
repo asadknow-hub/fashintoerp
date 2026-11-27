@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, lte, notInArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, lte, notInArray, sql } from "drizzle-orm";
 import { Package, TrendingUp, TriangleAlert, Truck } from "lucide-react";
 import Link from "next/link";
 import {
@@ -37,6 +37,7 @@ export default async function DashboardPage() {
         and(
           sql`${orders.createdAt} >= now() - interval '7 days'`,
           notInArray(orders.status, ["cancelled", "returned"]),
+          isNull(orders.exchangeOfId),
         ),
       ),
     db

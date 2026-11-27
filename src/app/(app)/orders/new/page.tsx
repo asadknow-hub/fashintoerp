@@ -2,7 +2,14 @@ import { asc, desc, eq, isNotNull, sql } from "drizzle-orm";
 import { ShoppingCart } from "lucide-react";
 import { FreshOnVisit } from "@/components/fresh-on-visit";
 import { db } from "@/db";
-import { customers, orders, productMedia, products, variants } from "@/db/schema";
+import {
+  customers,
+  deliveryCompanies,
+  orders,
+  productMedia,
+  products,
+  variants,
+} from "@/db/schema";
 import { requireUser } from "@/lib/auth";
 import { isUuid, orderName, sortSizes } from "@/lib/format";
 import { nextRefNumber } from "@/lib/order-ref";
@@ -64,6 +71,7 @@ export default async function NewOrderPage({
           id: orders.id,
           number: orders.number,
           ref: orders.trackingNumber,
+          companyId: orders.deliveryCompanyId,
           name: customers.name,
           phone: customers.phone,
           phone2: orders.phone2,
@@ -119,6 +127,19 @@ export default async function NewOrderPage({
   }
   const nextRef = await nextRefNumber(user.id);
 
+  // On an exchange the customer pays the delivery charge as the COD: the
+  // charge of the company that delivered the first order, or of the only
+  // company there is.
+  const couriers = original
+    ? await db
+        .select({ id: deliveryCompanies.id, name: deliveryCompanies.name, rate: deliveryCompanies.rate })
+        .from(deliveryCompanies)
+        .where(eq(deliveryCompanies.active, true))
+    : [];
+  const courier =
+    couriers.find((company) => company.id === original?.companyId) ??
+    (couriers.length === 1 ? couriers[0] : undefined);
+
   const header = (
       <div className="flex items-center gap-4">
         <span className="flex size-14 shrink-0 items-center justify-center rounded-xl bg-brand-100 text-brand">
@@ -154,10 +175,12 @@ export default async function NewOrderPage({
           street: original?.street ?? "",
           conversationId: param("conversation"),
           source: original ? "exchange" : param("source"),
+          cod: courier ? Number(courier.rate).toFixed(2) : "",
           exchange: original
             ? {
                 id: original.id,
                 label: `Order ${orderName(original.ref, original.number)}`,
+                courier: courier?.name ?? null,
               }
             : null,
         }}

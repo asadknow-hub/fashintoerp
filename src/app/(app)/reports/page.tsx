@@ -1,4 +1,4 @@
-import { and, eq, lte, notInArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, lte, notInArray, sql } from "drizzle-orm";
 import { Coins, Package, ShoppingCart, TrendingUp, Truck, Wallet } from "lucide-react";
 import Link from "next/link";
 import { Block, PageHeader } from "@/components/ui";
@@ -13,7 +13,14 @@ import {
 } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
 import { formatMoney } from "@/lib/format";
-import { itemShares, orderAmount } from "@/lib/order-amount";
+import {
+  courierCharges,
+  courierCollected,
+  itemShares,
+  orderAmount,
+  orderIncome,
+  settledAt,
+} from "@/lib/order-amount";
 import { getPrefs } from "@/lib/settings";
 
 const periods = [
@@ -31,21 +38,24 @@ export default async function ReportsPage({ searchParams }: PageProps<"/reports"
   // Orders that count as sales: not cancelled, not returned, inside the period.
   const counted = and(
     notInArray(orders.status, ["cancelled", "returned"]),
+    // An exchange replaces pieces already sold; its COD is the delivery charge.
+    isNull(orders.exchangeOfId),
     period.days === null
       ? undefined
       : sql`${orders.createdAt} >= now() - make_interval(days => ${period.days})`,
   );
 
-  // Delivered orders in the period: the delivery company collects the COD,
-  // keeps its charge, and pays over the rest.
-  const deliveredInPeriod = and(
-    eq(orders.status, "delivered"),
+  // Orders whose money is settled in the period: delivered, returned or
+  // cancelled. The delivery company collects the money, keeps its charges,
+  // and pays over the rest.
+  const settled = and(
+    inArray(orders.status, ["delivered", "returned", "cancelled"]),
     period.days === null
       ? undefined
-      : sql`coalesce(${orders.deliveredAt}, ${orders.createdAt}) >= now() - make_interval(days => ${period.days})`,
+      : sql`${settledAt} >= now() - make_interval(days => ${period.days})`,
   );
 
-  const [[sales], [pieces], [stock], [paid], [low], best, payouts] = await Promise.all([
+  const [[sales], [pieces], [stock], [paid], [low], best, payouts, [earned]] = await Promise.all([
     db
       .select({
         orders: sql<number>`count(*)::int`,
@@ -84,7 +94,7 @@ export default async function ReportsPage({ searchParams }: PageProps<"/reports"
       from (${itemShares}) s
       join variants v on v.id = s.variant_id
       join products p on p.id = v.product_id
-      where s.status not in ('cancelled', 'returned')
+      where s.status not in ('cancelled', 'returned') and s.exchange_of_id is null
         ${period.days === null ? sql`` : sql`and s.created_at >= now() - make_interval(days => ${period.days})`}
       group by p.id, p.name
       order by sum(s.quantity) desc, p.name
@@ -92,15 +102,27 @@ export default async function ReportsPage({ searchParams }: PageProps<"/reports"
     db
       .select({
         company: sql<string>`coalesce(${deliveryCompanies.name}, 'No company chosen')`,
-        orders: sql<number>`count(*)::int`,
-        cod: sql<string>`coalesce(sum(${orders.codAmount}), 0)`,
-        charges: sql<string>`coalesce(sum(${orders.deliveryCharge}), 0)`,
+        orders: sql<number>`(count(*) filter (where ${orders.status} = 'delivered'))::int`,
+        cod: sql<string>`coalesce(sum(${courierCollected}), 0)`,
+        charges: sql<string>`coalesce(sum(${courierCharges}), 0)`,
       })
       .from(orders)
       .leftJoin(deliveryCompanies, eq(deliveryCompanies.id, orders.deliveryCompanyId))
-      .where(deliveredInPeriod)
+      .where(settled)
       .groupBy(deliveryCompanies.id, deliveryCompanies.name)
+      .having(
+        sql`sum(${courierCollected}) <> 0 or sum(${courierCharges}) <> 0
+          or count(*) filter (where ${orders.status} = 'delivered') > 0`,
+      )
       .orderBy(deliveryCompanies.name),
+    // What the business earned: payouts, less COD given back on returns.
+    db
+      .select({
+        income: sql<string>`coalesce(sum(${orderIncome}), 0)`,
+        delivered: sql<number>`(count(*) filter (where ${orders.status} = 'delivered'))::int`,
+      })
+      .from(orders)
+      .where(settled),
   ]);
   const payoutTotal = payouts.reduce(
     (sum, row) => ({
@@ -123,8 +145,8 @@ export default async function ReportsPage({ searchParams }: PageProps<"/reports"
     },
     {
       label: "Income",
-      value: formatMoney(payoutTotal.cod - payoutTotal.charges, currency),
-      note: `${payoutTotal.orders} delivered · COD less delivery charges`,
+      value: formatMoney(earned.income, currency),
+      note: `${earned.delivered} delivered · COD less charges, returns and cancellations`,
       icon: Wallet,
       tone: "bg-emerald-50 border-emerald-100",
       iconTone: "bg-emerald-100 text-emerald-600",
@@ -250,7 +272,7 @@ export default async function ReportsPage({ searchParams }: PageProps<"/reports"
       <div className="mt-3">
         <Block
           title="Money from delivery companies"
-          subtitle={`Delivered orders · ${period.label}`}
+          subtitle={`Deliveries, returns and cancellations · ${period.label}`}
           icon={<Truck />}
           flush
         >
@@ -260,7 +282,7 @@ export default async function ReportsPage({ searchParams }: PageProps<"/reports"
                 <tr>
                   <th className="th rounded-l-lg">Delivery company</th>
                   <th className="th text-center">Delivered orders</th>
-                  <th className="th text-right">COD collected</th>
+                  <th className="th text-right">Collected from customers</th>
                   <th className="th text-right">Their delivery charges</th>
                   <th className="th rounded-r-lg text-right">You receive</th>
                 </tr>
@@ -269,7 +291,7 @@ export default async function ReportsPage({ searchParams }: PageProps<"/reports"
                 {payouts.length === 0 && (
                   <tr>
                     <td colSpan={5} className="td py-4 text-center text-stone-500">
-                      No orders were delivered in this period.
+                      Nothing was delivered, returned or cancelled in this period.
                     </td>
                   </tr>
                 )}

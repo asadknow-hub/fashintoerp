@@ -665,8 +665,10 @@ type Props = {
     street: string;
     conversationId: string;
     source: string;
+    // The COD to start with (an exchange starts with the delivery charge).
+    cod: string;
     // The order this one replaces, when it is an exchange.
-    exchange: { id: string; label: string } | null;
+    exchange: { id: string; label: string; courier: string | null } | null;
   };
 };
 
@@ -746,7 +748,7 @@ function Editor({
   // Empty means today.
   const [orderDate, setOrderDate] = useState(draft?.orderDate ?? "");
   const [shippingFee, setShippingFee] = useState(draft?.shippingFee ?? "");
-  const [cod, setCod] = useState(draft?.cod ?? "");
+  const [cod, setCod] = useState(draft?.cod ?? defaults.cod);
   const [instruction, setInstruction] = useState(draft?.instruction ?? "");
   const [notes, setNotes] = useState(draft?.notes ?? "");
   const [known, setKnown] = useState<string | null>(null);
@@ -1051,8 +1053,9 @@ function Editor({
             <Link href={`/orders/${defaults.exchange.id}`} className="font-semibold underline">
               {defaults.exchange.label}
             </Link>
-            . This is saved as a new order, marked as an exchange. Pick what the customer gets
-            instead.
+            . Pick what the customer gets instead. The COD is the delivery charge the customer
+            pays{defaults.exchange.courier ? ` ${defaults.exchange.courier}` : ""}: it stays with
+            the delivery company, and anything less than their charge comes off your payout.
           </span>
         </p>
       )}
