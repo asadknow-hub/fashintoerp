@@ -126,3 +126,22 @@ export const UAE_AREAS: Record<string, string[]> = {
 };
 
 export const UAE_CITIES = Object.keys(UAE_AREAS);
+
+// The short code a city goes by, as couriers write it: Dubai is DXB.
+const CITY_CODES: Record<string, string> = {
+  Dubai: "DXB",
+  "Abu Dhabi": "AUH",
+  Sharjah: "SHJ",
+  Ajman: "AJM",
+  "Al Ain": "AAN",
+  "Ras Al Khaimah": "RAK",
+  Fujairah: "FUJ",
+  "Umm Al Quwain": "UAQ",
+};
+
+// Any other city gets its first three letters.
+export function cityCode(city: string | null | undefined) {
+  const name = city?.trim();
+  if (!name) return "";
+  return CITY_CODES[name] ?? name.replace(/[^a-z]/gi, "").slice(0, 3).toUpperCase();
+}

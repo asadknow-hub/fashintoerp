@@ -55,12 +55,30 @@ export function OrderActions({
   currency: string;
 }) {
   const [open, setOpen] = useState(false);
+  // The button fills up as the three steps get ticked: a third for each,
+  // yellow on the way and green once delivered.
+  const done = { new: 0, portal: 1, dispatched: 2, delivered: 3, closed: 0 }[order.stage];
+  const upTo = `${Math.round((done / 3) * 100)}%`;
+  const fill = done === 3 ? "#6ee7b7" : "#fcd34d";
   return (
     <>
       <button
         type="button"
         onClick={() => setOpen(true)}
         aria-label={`Actions for order ${order.name}`}
+        data-progress={done}
+        title={
+          `${done} of 3 steps done` +
+          (order.company ? ` · ${order.company}` : "") +
+          (order.deliveryCharge !== null
+            ? ` · ${currency} ${order.deliveryCharge.toFixed(2)}`
+            : "")
+        }
+        style={
+          done
+            ? { background: `linear-gradient(to right, ${fill} ${upTo}, #ffffff ${upTo})` }
+            : undefined
+        }
         className="btn-secondary btn-sm whitespace-nowrap"
       >
         <ListChecks className="size-3.5" /> Actions

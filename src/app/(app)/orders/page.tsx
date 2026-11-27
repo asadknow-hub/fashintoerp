@@ -23,6 +23,7 @@ import {
 } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
 import { formatDate, formatDateTime, formatMoney, isUuid, orderName } from "@/lib/format";
+import { cityCode } from "@/lib/locations";
 import { getPrefs } from "@/lib/settings";
 import { OrderActions, type OrderCard } from "./order-actions";
 import { OrderBoard } from "./order-board";
@@ -486,8 +487,12 @@ export default async function OrdersPage({
                     <td className={cell + " max-w-52"} data-order-address>
                       {row.city || row.area || row.street ? (
                         <>
-                          {row.city && <span className="block font-semibold">{row.city}</span>}
-                          {row.area && <span className="block">{row.area}</span>}
+                          {/* Area with the city's code beside it, to keep the row short. */}
+                          {(row.area || row.city) && (
+                            <span className="block font-semibold" title={row.city ?? undefined}>
+                              {[row.area, cityCode(row.city)].filter(Boolean).join(", ")}
+                            </span>
+                          )}
                           {row.street && (
                             <span className="block text-stone-600">
                               {row.street}
@@ -514,13 +519,6 @@ export default async function OrdersPage({
                           order={card(row)}
                         />
                       )}
-                      {row.company && (
-                        <span className="mt-1 block text-xs whitespace-nowrap text-stone-500">
-                          {row.company}
-                          {row.deliveryCharge !== null &&
-                            ` · ${formatMoney(row.deliveryCharge, currency)}`}
-                        </span>
-                      )}
                       {row.exchangeOfId && row.status === "delivered" && (
                         <span className="mt-1 block text-xs text-stone-500">
                           {row.oldItemsReceived === true
@@ -532,9 +530,8 @@ export default async function OrdersPage({
                       )}
                       {row.status === "returned" && (
                         <span className="mt-1 block text-xs text-stone-500">
-                          {row.returnFee === null
-                            ? "Customer not covering delivery"
-                            : `Customer pays ${formatMoney(row.returnFee, currency)}`}
+                          {row.returnFee !== null &&
+                            `Customer pays ${formatMoney(row.returnFee, currency)}`}
                         </span>
                       )}
                     </td>
