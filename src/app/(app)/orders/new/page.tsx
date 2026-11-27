@@ -4,7 +4,7 @@ import { FreshOnVisit } from "@/components/fresh-on-visit";
 import { db } from "@/db";
 import { customers, orders, productMedia, products, variants } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
-import { isUuid, sortSizes } from "@/lib/format";
+import { isUuid, orderName, sortSizes } from "@/lib/format";
 import { getPrefs } from "@/lib/settings";
 import { OrderForm, type OrderProduct } from "./order-form";
 
@@ -167,7 +167,7 @@ export default async function NewOrderPage({
           exchange: original
             ? {
                 id: original.id,
-                label: `Order #${original.number}${original.ref ? ` (${original.ref})` : ""}`,
+                label: `Order ${orderName(original.ref, original.number)}`,
               }
             : null,
         }}

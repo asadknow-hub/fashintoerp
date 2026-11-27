@@ -1,6 +1,11 @@
 // The one currency the whole system works in.
 export const CURRENCY = "AED";
 
+// What an order is called: its FO number, which is how the business knows
+// it. Only an order saved without one falls back to the system's own number.
+export const orderName = (ref: string | null | undefined, number: number) =>
+  ref?.trim() || `#${number}`;
+
 // Money as it is shown everywhere: "AED 1,250.00".
 export function formatMoney(value: string | number | null, currency: string = CURRENCY) {
   const amount = Number(value ?? 0);

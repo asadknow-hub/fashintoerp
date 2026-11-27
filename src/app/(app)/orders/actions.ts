@@ -16,7 +16,15 @@ import {
   variants,
 } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
-import { amount, cleanPhone, isUuid, optional, text, variantLabel } from "@/lib/format";
+import {
+  amount,
+  cleanPhone,
+  isUuid,
+  optional,
+  orderName,
+  text,
+  variantLabel,
+} from "@/lib/format";
 import { getPrefs } from "@/lib/settings";
 import { changeStock, StockError } from "@/lib/stock";
 import type { Tx } from "@/db";
@@ -50,7 +58,7 @@ function readOrderDate(form: FormData, timezone: string) {
 async function refuseUsedRef(tx: Tx, ref: string, exceptOrderId?: string) {
   await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${ref}))`);
   const [taken] = await tx
-    .select({ number: orders.number })
+    .select({ id: orders.id })
     .from(orders)
     .where(
       and(
@@ -59,7 +67,7 @@ async function refuseUsedRef(tx: Tx, ref: string, exceptOrderId?: string) {
       ),
     )
     .limit(1);
-  if (taken) throw new StockError(`${ref} is already used on Order #${taken.number}.`);
+  if (taken) throw new StockError(`${ref} is already used on another order.`);
 }
 
 type Line = { variantId: string; quantity: number; unitPrice: string; discount: string };
@@ -251,7 +259,7 @@ export async function createOrder(
           variantId: line.variantId,
           change: -line.quantity,
           reason: "sale",
-          note: `Order #${order.number}`,
+          note: `Order ${orderName(shipperRef, order.number)}`,
           orderId: order.id,
           userId: user.id,
         });
@@ -345,7 +353,7 @@ export async function updateOrder(
             variantId: item.variantId,
             change: item.quantity,
             reason: status === "returned" ? "return" : "cancelled",
-            note: `Order #${order.number}`,
+            note: `Order ${orderName(order.trackingNumber, order.number)}`,
             orderId,
             userId: user.id,
           });
@@ -429,7 +437,7 @@ export async function watchShipperRef(typed: string) {
 
   const [[usedBy], others] = await Promise.all([
     db
-      .select({ id: orders.id, number: orders.number })
+      .select({ id: orders.id })
       .from(orders)
       .where(sql`upper(${orders.trackingNumber}) = ${ref}`)
       .limit(1),
@@ -532,7 +540,7 @@ export async function createReturn(
   try {
     await db.transaction(async (tx) => {
       const [order] = await tx
-        .select({ status: orders.status, number: orders.number })
+        .select({ status: orders.status, number: orders.number, ref: orders.trackingNumber })
         .from(orders)
         .where(eq(orders.id, orderId))
         .for("update");
@@ -546,7 +554,7 @@ export async function createReturn(
           variantId: item.variantId,
           change: item.quantity,
           reason: "return",
-          note: `Order #${order.number}`,
+          note: `Order ${orderName(order.ref, order.number)}`,
           orderId,
           userId: user.id,
         });

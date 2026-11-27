@@ -105,9 +105,8 @@ export function OrderBoard({
                         href={`/orders/${card.id}`}
                         className="font-bold tabular-nums hover:text-brand hover:underline"
                       >
-                        #{card.number}
+                        {card.name}
                       </Link>
-                      {card.ref && <span className="text-xs text-stone-500">{card.ref}</span>}
                       {card.exchange && (
                         <span className="rounded-full bg-violet-100 px-1.5 py-0.5 text-[10px] font-bold text-violet-700">
                           Exchange
@@ -130,7 +129,7 @@ export function OrderBoard({
                       <button
                         type="button"
                         onClick={() => setOpened({ id: card.id })}
-                        aria-label={`Actions for order #${card.number}`}
+                        aria-label={`Actions for order ${card.name}`}
                         className="btn-secondary btn-sm whitespace-nowrap"
                       >
                         <ListChecks className="size-3.5" /> Actions

@@ -961,7 +961,7 @@ function Editor({
             : codWrong
               ? "Enter the COD amount as a number."
               : refNow?.usedBy
-                ? `${fullRef} is already used on Order #${refNow.usedBy.number}.`
+                ? `${fullRef} is already used on another order.`
                 : orderDate > today
                   ? "The order date can't be in the future."
                   : null;
@@ -1099,11 +1099,10 @@ function Editor({
               </IconBox>
               {refNow?.usedBy && (
                 <span data-ref-used className="mt-1 block text-xs font-semibold text-rose-700">
-                  {fullRef} is already used on{" "}
+                  {fullRef} is already used on another order.{" "}
                   <Link href={`/orders/${refNow.usedBy.id}`} className="underline">
-                    Order #{refNow.usedBy.number}
+                    Open it
                   </Link>
-                  .
                 </span>
               )}
               {refNow && !refNow.usedBy && refNow.others.length > 0 && (

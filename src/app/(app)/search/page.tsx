@@ -11,7 +11,7 @@ import {
 import { db } from "@/db";
 import { customers, orders, productMedia, products, variants } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
-import { formatDate, formatMoney } from "@/lib/format";
+import { formatDate, formatMoney, orderName } from "@/lib/format";
 import { getPrefs } from "@/lib/settings";
 
 // Results for the search box at the top of every page.
@@ -63,6 +63,7 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
           .select({
             id: orders.id,
             number: orders.number,
+            ref: orders.trackingNumber,
             status: orders.status,
             payment: orders.payment,
             codAmount: orders.codAmount,
@@ -153,7 +154,7 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
                     href={`/orders/${order.id}`}
                     className="flex items-center gap-3 px-4 py-2 text-sm hover:bg-stone-50"
                   >
-                    <span className="font-bold tabular-nums">#{order.number}</span>
+                    <span className="font-bold tabular-nums">{orderName(order.ref, order.number)}</span>
                     <span className="min-w-0 flex-1 truncate text-stone-600">
                       {order.customer}
                       {order.phone ? ` · ${order.phone}` : ""} · {formatDate(order.createdAt, timezone)}

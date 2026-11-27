@@ -19,7 +19,7 @@ import {
   variants,
 } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
-import { formatDate, formatMoney, variantLabel } from "@/lib/format";
+import { formatDate, formatMoney, orderName, variantLabel } from "@/lib/format";
 import { orderAmount } from "@/lib/order-amount";
 import { getPrefs } from "@/lib/settings";
 
@@ -69,6 +69,7 @@ export default async function DashboardPage() {
       .select({
         id: orders.id,
         number: orders.number,
+        ref: orders.trackingNumber,
         status: orders.status,
         payment: orders.payment,
         codAmount: orders.codAmount,
@@ -198,7 +199,9 @@ export default async function DashboardPage() {
             )}
             {recentOrders.map((order) => (
               <Link key={order.id} href={`/orders/${order.id}`} className={row}>
-                <span className="font-semibold tabular-nums">#{order.number}</span>
+                <span className="font-semibold tabular-nums">
+                  {orderName(order.ref, order.number)}
+                </span>
                 <span className="min-w-0 flex-1 truncate text-stone-600">
                   {order.customer} · {formatDate(order.createdAt, timezone)}
                 </span>

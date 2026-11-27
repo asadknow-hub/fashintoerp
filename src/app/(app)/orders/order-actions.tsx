@@ -16,7 +16,8 @@ export type Stage = "new" | "portal" | "dispatched" | "delivered";
 export type OrderCard = {
   id: string;
   number: number;
-  ref: string | null;
+  // What the order is called: its FO number.
+  name: string;
   customer: string;
   phone: string | null;
   stage: Stage | "closed";
@@ -50,7 +51,7 @@ export function OrderActions({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        aria-label={`Actions for order #${order.number}`}
+        aria-label={`Actions for order ${order.name}`}
         className="btn-secondary btn-sm whitespace-nowrap"
       >
         <ListChecks className="size-3.5" /> Actions
@@ -130,7 +131,7 @@ export function StepsModal({
   if (view === "return") {
     return (
       <Modal
-        title={`Return for Order #${order.number}`}
+        title={`Return for Order ${order.name}`}
         subtitle={`${order.customer} — ${order.contents}`}
         onClose={onClose}
       >
@@ -207,7 +208,7 @@ export function StepsModal({
 
   return (
     <Modal
-      title={`Order #${order.number}`}
+      title={`Order ${order.name}`}
       subtitle={`${order.customer} — tick what has been done`}
       onClose={onClose}
     >

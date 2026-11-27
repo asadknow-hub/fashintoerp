@@ -1,6 +1,7 @@
 import { and, asc, count, desc, eq, exists, ilike, inArray, or, sql } from "drizzle-orm";
 import { Columns3, List } from "lucide-react";
 import Link from "next/link";
+import { CopyButton } from "@/components/copy-button";
 import {
   Badge,
   Empty,
@@ -20,7 +21,7 @@ import {
   variants,
 } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
-import { formatDate, formatDateTime, formatMoney, isUuid } from "@/lib/format";
+import { formatDate, formatDateTime, formatMoney, isUuid, orderName } from "@/lib/format";
 import { getPrefs } from "@/lib/settings";
 import { OrderActions, type OrderCard } from "./order-actions";
 import { OrderBoard } from "./order-board";
@@ -192,7 +193,7 @@ export default async function OrdersPage({
   const card = (row: (typeof rows)[number]): OrderCard => ({
     id: row.id,
     number: row.number,
-    ref: row.ref,
+    name: orderName(row.ref, row.number),
     customer: row.customer,
     phone: row.phone,
     stage: stageOf(row.status),
@@ -314,7 +315,7 @@ export default async function OrdersPage({
           <input
             name="q"
             defaultValue={q}
-            placeholder="Order #, name, phone or shipper ref"
+            placeholder="FO number, name or phone"
             className="input w-56"
           />
           <button className="btn-secondary">Search</button>
@@ -372,9 +373,9 @@ export default async function OrdersPage({
                         href={`/orders/${row.id}`}
                         className="font-bold tabular-nums hover:text-brand hover:underline"
                       >
-                        #{row.number}
+                        {orderName(row.ref, row.number)}
                       </Link>
-                      {row.ref && <span className="block text-xs text-stone-500">{row.ref}</span>}
+                      {row.ref && <CopyButton text={row.ref} label="order number" />}
                       {row.exchangeOfId && (
                         <span className="mt-0.5 block text-[11px] font-bold text-violet-700">
                           Exchange
@@ -387,28 +388,55 @@ export default async function OrdersPage({
                       </span>
                     </td>
                     <td className={cell}>
-                      <span className="font-semibold">{row.customer}</span>
+                      <span className="block whitespace-nowrap">
+                        <span className="font-semibold">{row.customer}</span>
+                        <CopyButton text={row.customer} label="name" />
+                      </span>
                       {row.phone && (
                         <span className="block text-xs whitespace-nowrap text-stone-500">
                           {row.phone}
+                          <CopyButton text={row.phone} label="mobile" />
                         </span>
                       )}
                       {row.phone2 && (
                         <span className="block text-xs whitespace-nowrap text-stone-500">
                           {row.phone2}
+                          <CopyButton text={row.phone2} label="second mobile" />
                         </span>
                       )}
                     </td>
                     <td className={cell + " text-center font-bold tabular-nums"}>
                       {inside?.pieces ?? 0}
                     </td>
-                    <td className={cell + " max-w-44 text-stone-700"}>{row.instruction ?? "—"}</td>
+                    <td className={cell + " max-w-44 text-stone-700"}>
+                      {row.instruction ? (
+                        <>
+                          {row.instruction}
+                          <CopyButton text={row.instruction} label="instruction" />
+                        </>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
                     <td className={cell + " max-w-56"} data-order-contents>
                       {inside
-                        ? [...inside.products].map(([product, what]) => (
+                        ? [...inside.products].map(([product, what], index, all) => (
                             <span key={product} className="block">
                               <span className="block text-xs text-stone-500">{product}</span>
                               <span className="font-semibold">{what.join(", ")}</span>
+                              {/* One button copies everything in the order: just
+                                  the pieces, with product names when there are
+                                  several products. */}
+                              {index === all.length - 1 && (
+                                <CopyButton
+                                  label="description"
+                                  text={
+                                    all.length === 1
+                                      ? what.join(", ")
+                                      : all.map(([name, items]) => `${name}: ${items.join(", ")}`).join("; ")
+                                  }
+                                />
+                              )}
                             </span>
                           ))
                         : "—"}
@@ -421,7 +449,12 @@ export default async function OrdersPage({
                         <>
                           {row.city && <span className="block font-semibold">{row.city}</span>}
                           {row.area && <span className="block">{row.area}</span>}
-                          {row.street && <span className="block text-stone-600">{row.street}</span>}
+                          {row.street && (
+                            <span className="block text-stone-600">
+                              {row.street}
+                              <CopyButton text={row.street} label="street address" />
+                            </span>
+                          )}
                         </>
                       ) : (
                         (row.shippingAddress ?? "—")

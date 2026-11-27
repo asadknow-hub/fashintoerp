@@ -13,7 +13,7 @@ import {
   variants,
 } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
-import { formatDateTime, formatMoney, isUuid, variantLabel } from "@/lib/format";
+import { formatDateTime, formatMoney, isUuid, orderName, variantLabel } from "@/lib/format";
 import { getPrefs } from "@/lib/settings";
 import { updateOrder } from "../actions";
 
@@ -68,12 +68,12 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
   const [[replaces], replacedBy] = await Promise.all([
     order.exchangeOfId
       ? db
-          .select({ id: orders.id, number: orders.number })
+          .select({ id: orders.id, number: orders.number, ref: orders.trackingNumber })
           .from(orders)
           .where(eq(orders.id, order.exchangeOfId))
       : Promise.resolve([]),
     db
-      .select({ id: orders.id, number: orders.number })
+      .select({ id: orders.id, number: orders.number, ref: orders.trackingNumber })
       .from(orders)
       .where(eq(orders.exchangeOfId, order.id)),
   ]);
@@ -85,7 +85,7 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
           ← Orders
         </Link>
         <h1 className="mt-1 flex items-center gap-3 text-xl font-semibold tracking-tight">
-          Order #{order.number}
+          Order {orderName(order.trackingNumber, order.number)}
           <Badge tone={orderStatusTone[order.status]}>{orderStatusLabel[order.status]}</Badge>
         </h1>
         <p className="text-sm text-stone-500">{formatDateTime(order.createdAt, timezone)}</p>
@@ -242,7 +242,7 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
                 <p>
                   This order is an exchange for{" "}
                   <Link href={`/orders/${replaces.id}`} className="font-semibold text-brand underline">
-                    Order #{replaces.number}
+                    Order {orderName(replaces.ref, replaces.number)}
                   </Link>
                 </p>
               )}
@@ -250,7 +250,7 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
                 <p key={next.id}>
                   Exchanged with{" "}
                   <Link href={`/orders/${next.id}`} className="font-semibold text-brand underline">
-                    Order #{next.number}
+                    Order {orderName(next.ref, next.number)}
                   </Link>
                 </p>
               ))}
