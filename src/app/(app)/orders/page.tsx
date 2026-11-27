@@ -27,11 +27,8 @@ const filters: { key: string; label: string; statuses?: Status[] }[] = [
   },
   { key: "shipped", label: "Shipped", statuses: ["shipped"] },
   { key: "delivered", label: "Delivered", statuses: ["delivered"] },
-  {
-    key: "closed",
-    label: "Cancelled / returned",
-    statuses: ["cancelled", "returned"],
-  },
+  { key: "cancelled", label: "Cancelled", statuses: ["cancelled"] },
+  { key: "returned", label: "Returns", statuses: ["returned"] },
 ];
 
 export default async function OrdersPage({
@@ -68,6 +65,7 @@ export default async function OrdersPage({
       ? or(
           ilike(customers.name, `%${q}%`),
           ilike(customers.phone, `%${q}%`),
+          ilike(orders.trackingNumber, `%${q}%`),
           number !== null && number < 2 ** 31
             ? eq(orders.number, number)
             : undefined,
@@ -86,6 +84,8 @@ export default async function OrdersPage({
         number: orders.number,
         status: orders.status,
         payment: orders.payment,
+        codAmount: orders.codAmount,
+        city: orders.city,
         total: orders.total,
         createdAt: orders.createdAt,
         customer: customers.name,
@@ -112,8 +112,13 @@ export default async function OrdersPage({
   return (
     <>
       <PageHeader
-        title="Orders"
-        action={{ href: "/orders/new", label: "New order" }}
+        title={filter.key === "returned" ? "Order Returns" : "Orders"}
+        subtitle={
+          filter.key === "returned"
+            ? "Orders that came back. Their items were put back in stock."
+            : undefined
+        }
+        action={{ href: "/orders/new", label: "Create Order" }}
       />
 
       {only && (
@@ -164,7 +169,7 @@ export default async function OrdersPage({
           <input
             name="q"
             defaultValue={q}
-            placeholder="Order #, name or phone"
+            placeholder="Order #, name, phone or shipper ref"
             className="input w-56"
           />
           <button className="btn-secondary">Search</button>
@@ -172,7 +177,18 @@ export default async function OrdersPage({
       </div>
 
       {rows.length === 0 ? (
-        <Empty title={q || filter.key ? "Nothing found" : "No orders yet"}>
+        <Empty
+          title={
+            filter.key === "returned" && !q
+              ? "No returns"
+              : q || filter.key
+                ? "Nothing found"
+                : "No orders yet"
+          }
+        >
+          {filter.key === "returned" &&
+            !q &&
+            "To record a return, open the order and set its status to Returned."}
           {!q && !filter.key && "Orders you create will show up here."}
         </Empty>
       ) : (
@@ -184,7 +200,7 @@ export default async function OrdersPage({
                 <th className="th">Date</th>
                 <th className="th">Customer</th>
                 <th className="th">Items</th>
-                <th className="th">Payment</th>
+                <th className="th">COD</th>
                 <th className="th">Status</th>
                 <th className="th text-right">Total</th>
               </tr>
@@ -213,7 +229,7 @@ export default async function OrdersPage({
                   </td>
                   <td className="td text-stone-600">{row.items}</td>
                   <td className="td text-stone-600">
-                    {row.payment === "cod" ? "Cash on delivery" : "Paid"}
+                    {row.payment === "cod" ? formatMoney(row.codAmount, currency) : "Paid"}
                   </td>
                   <td className="td">
                     <Badge tone={orderStatusTone[row.status]}>

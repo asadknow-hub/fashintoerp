@@ -48,27 +48,36 @@ export async function createOrder(
   const user = await requireUser();
   const name = text(form, "name");
   const phone = cleanPhone(text(form, "phone")) || null;
-  const address = optional(form, "address");
+  const phone2 = cleanPhone(text(form, "phone2")) || null;
+  const country = optional(form, "country");
   const city = optional(form, "city");
-  const payment = text(form, "payment") === "prepaid" ? "prepaid" : "cod";
+  const area = optional(form, "area");
+  const street = optional(form, "street");
   const shippingFee = amount(form, "shippingFee");
-  const discount = amount(form, "discount");
+  const codTyped = text(form, "cod");
+  const codAmount = amount(form, "cod");
   const conversationId = text(form, "conversationId");
   const lines = readLines(form);
 
-  if (!name) return { error: "Enter the customer's name." };
+  if (!name) return { error: "Enter the receiver's name." };
+  if (!phone) return { error: "Enter the receiver's mobile number." };
+  if (!country || !city || !area) return { error: "Choose the country, city and area." };
   if (!lines) return { error: "Something is wrong with the items. Please re-add them." };
   if (lines.length === 0) return { error: "Add at least one item." };
-  if (shippingFee === null || discount === null) {
-    return { error: "Delivery fee and discount must be numbers." };
-  }
+  if (shippingFee === null) return { error: "Delivery must be a number." };
+  if (codTyped === "" || codAmount === null) return { error: "Enter the COD amount (0 if already paid)." };
 
   const subtotal = lines.reduce(
     (sum, line) => sum + line.quantity * Number(line.unitPrice),
     0,
   );
-  const total = subtotal + Number(shippingFee) - Number(discount);
-  if (total < 0) return { error: "Discount is bigger than the order total." };
+  const total = subtotal + Number(shippingFee);
+  if (Number(codAmount) > total + 0.005) {
+    return { error: "The COD amount can't be more than the order total." };
+  }
+  // Nothing to collect on delivery means it was paid already.
+  const payment = Number(codAmount) > 0 ? "cod" : "prepaid";
+  const where = { country, city, area, address: street };
 
   let orderId: string;
   try {
@@ -117,14 +126,15 @@ export async function createOrder(
         : [];
       let customerId = existing?.id;
       if (customerId) {
+        // A returning customer's details follow their latest order.
         await tx
           .update(customers)
-          .set({ name, ...(address && { address }), ...(city && { city }) })
+          .set({ name, ...where, ...(phone2 && { phone2 }) })
           .where(eq(customers.id, customerId));
       } else {
         const [created] = await tx
           .insert(customers)
-          .values({ name, phone, address, city })
+          .values({ name, phone, phone2, ...where })
           .returning({ id: customers.id });
         customerId = created.id;
       }
@@ -135,11 +145,18 @@ export async function createOrder(
           customerId,
           payment,
           source: optional(form, "source"),
-          shippingAddress: [address, city].filter(Boolean).join(", ") || null,
+          shippingAddress: [street, area, city, country].filter(Boolean).join(", "),
+          country,
+          city,
+          area,
+          street,
+          phone2,
           shippingFee,
-          discount,
+          codAmount,
           total: total.toFixed(2),
+          instruction: optional(form, "instruction"),
           notes: optional(form, "notes"),
+          trackingNumber: optional(form, "shipperRef"),
           createdBy: user.id,
         })
         .returning({ id: orders.id, number: orders.number });
@@ -242,12 +259,7 @@ export async function lookupCustomer(phoneTyped: string) {
   const phone = cleanPhone(String(phoneTyped ?? ""));
   if (phone.replace("+", "").length < 6) return null;
   const [customer] = await db
-    .select({
-      id: customers.id,
-      name: customers.name,
-      address: customers.address,
-      city: customers.city,
-    })
+    .select()
     .from(customers)
     .where(eq(customers.phone, phone))
     .limit(1);
@@ -258,8 +270,11 @@ export async function lookupCustomer(phoneTyped: string) {
     .where(eq(orders.customerId, customer.id));
   return {
     name: customer.name,
-    address: customer.address ?? "",
+    phone2: customer.phone2 ?? "",
+    country: customer.country ?? "",
     city: customer.city ?? "",
+    area: customer.area ?? "",
+    street: customer.address ?? "",
     orders: total,
   };
 }

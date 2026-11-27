@@ -1,4 +1,4 @@
-import { count, desc, eq, ilike, or, sql } from "drizzle-orm";
+import { and, count, desc, eq, ilike, isNull, or, sql } from "drizzle-orm";
 import Link from "next/link";
 import { Empty, PageHeader, pageNumber, Pager } from "@/components/ui";
 import { db } from "@/db";
@@ -18,9 +18,11 @@ export default async function PurchasesPage({ searchParams }: PageProps<"/purcha
   ]);
   const q = typeof params.q === "string" ? params.q.trim() : "";
   const page = pageNumber(params.page);
-  const where = q
-    ? or(ilike(products.name, `%${q}%`), ilike(stockPurchases.note, `%${q}%`))
-    : undefined;
+  const missing = params.view === "missing";
+  const where = and(
+    missing ? isNull(stockPurchases.totalCost) : undefined,
+    q ? or(ilike(products.name, `%${q}%`), ilike(stockPurchases.note, `%${q}%`)) : undefined,
+  );
 
   const [[totals], rows] = await Promise.all([
     db
@@ -56,8 +58,12 @@ export default async function PurchasesPage({ searchParams }: PageProps<"/purcha
   return (
     <>
       <PageHeader
-        title="Purchases"
-        subtitle="Every batch of stock you bought, and what you paid for it."
+        title={missing ? "Purchases — Missing Costs" : "Purchases"}
+        subtitle={
+          missing
+            ? "Batches where what you paid has not been typed in yet."
+            : "Every batch of stock you bought, and what you paid for it."
+        }
       />
 
       <div className="mb-3 flex flex-wrap items-center gap-3">
@@ -77,6 +83,7 @@ export default async function PurchasesPage({ searchParams }: PageProps<"/purcha
           ))}
         </dl>
         <form className="flex gap-2">
+          {missing && <input type="hidden" name="view" value="missing" />}
           <input
             name="q"
             defaultValue={q}
@@ -87,16 +94,21 @@ export default async function PurchasesPage({ searchParams }: PageProps<"/purcha
         </form>
       </div>
 
-      {totals.unpriced > 0 && (
+      {totals.unpriced > 0 && !missing && (
         <p className="card mb-3 border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
           {totals.unpriced} {totals.unpriced === 1 ? "batch has" : "batches have"} no cost yet. Open
-          the product and click the batch to type what you paid.
+          the product and click the batch to type what you paid.{" "}
+          <Link href="/purchases?view=missing" className="font-semibold underline">
+            Show them
+          </Link>
         </p>
       )}
 
       {rows.length === 0 ? (
-        <Empty title={q ? "Nothing found" : "No purchases yet"}>
-          {!q && "A batch is recorded each time you add a product with stock or receive stock."}
+        <Empty title={missing && !q ? "No missing costs" : q ? "Nothing found" : "No purchases yet"}>
+          {missing && !q && "Every batch has what you paid for it."}
+          {!q &&
+            !missing && "A batch is recorded each time you add a product with stock or receive stock."}
         </Empty>
       ) : (
         <div className="card overflow-x-auto p-3">
@@ -153,6 +165,7 @@ export default async function PurchasesPage({ searchParams }: PageProps<"/purcha
         total={totals.lots}
         href={(target) => {
           const query = new URLSearchParams();
+          if (missing) query.set("view", "missing");
           if (q) query.set("q", q);
           if (target > 1) query.set("page", String(target));
           const text = query.toString();

@@ -7,7 +7,6 @@ import type { ActionState } from "@/components/action-form";
 import { db } from "@/db";
 import { settings, users } from "@/db/schema";
 import { hashPassword, requireOwner, requireUser, verifyPassword } from "@/lib/auth";
-import { CURRENCIES } from "@/lib/currencies";
 import { isTimeZone, text } from "@/lib/format";
 
 export async function updateBusiness(
@@ -16,12 +15,10 @@ export async function updateBusiness(
 ): Promise<ActionState> {
   await requireOwner();
   const businessName = text(form, "businessName");
-  const currency = text(form, "currency");
   if (!businessName) return { error: "Enter your business name." };
   const timezone = text(form, "timezone");
-  if (!CURRENCIES.some((c) => c.code === currency)) return { error: "Pick a currency." };
   if (!timezone || !isTimeZone(timezone)) return { error: "Pick a time zone." };
-  await db.update(settings).set({ businessName, currency, timezone }).where(eq(settings.id, 1));
+  await db.update(settings).set({ businessName, timezone }).where(eq(settings.id, 1));
   refresh();
   return { ok: "Saved." };
 }

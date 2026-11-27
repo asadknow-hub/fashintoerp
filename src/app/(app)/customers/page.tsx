@@ -29,6 +29,7 @@ export default async function CustomersPage({
         name: customers.name,
         phone: customers.phone,
         city: customers.city,
+        area: customers.area,
         createdAt: customers.createdAt,
         orderCount: sql<number>`count(${orders.id})::int`,
         spent: sql<string>`coalesce(sum(${orders.total}) filter (where ${orders.status} not in ('cancelled', 'returned')), 0)`,
@@ -92,7 +93,7 @@ export default async function CustomersPage({
                     </Link>
                   </td>
                   <td className="td text-stone-600">{row.phone ?? "—"}</td>
-                  <td className="td text-stone-600">{row.city ?? "—"}</td>
+                  <td className="td text-stone-600">{[row.area, row.city].filter(Boolean).join(", ") || "—"}</td>
                   <td className="td text-stone-600">
                     {formatDate(row.createdAt, timezone)}
                   </td>

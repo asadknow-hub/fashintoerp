@@ -26,7 +26,7 @@ export function SearchBox() {
   return (
     <form
       role="search"
-      className="relative w-full max-w-sm"
+      className="relative min-w-0 flex-1 sm:w-72 sm:flex-none lg:w-80"
       onSubmit={(event) => {
         event.preventDefault();
         const q = input.current?.value.trim();
@@ -38,11 +38,11 @@ export function SearchBox() {
         ref={input}
         name="q"
         aria-label="Search"
-        placeholder="Search products, SKUs, or orders…"
+        placeholder="Search products, orders, customers…"
         autoComplete="off"
         className="w-full rounded-lg border border-transparent bg-stone-100 py-2 pr-9 pl-9 text-sm outline-none placeholder:text-stone-500 focus:border-brand focus:bg-white focus:ring-1 focus:ring-brand"
       />
-      <kbd className="pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2 rounded border border-stone-300 bg-white px-1.5 text-[11px] font-semibold text-stone-500">
+      <kbd className="pointer-events-none absolute max-sm:hidden top-1/2 right-2.5 -translate-y-1/2 rounded border border-stone-300 bg-white px-1.5 text-[11px] font-semibold text-stone-500">
         /
       </kbd>
     </form>

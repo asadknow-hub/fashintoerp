@@ -1,7 +1,6 @@
 import { asc, eq, sql } from "drizzle-orm";
-import Link from "next/link";
+import { ShoppingCart } from "lucide-react";
 import { FreshOnVisit } from "@/components/fresh-on-visit";
-import { PageHeader } from "@/components/ui";
 import { db } from "@/db";
 import { productMedia, products, variants } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
@@ -75,10 +74,19 @@ export default async function NewOrderPage({
 
   return (
     <div>
-      <PageHeader
-        title="New order"
-        subtitle="Pick the product, then its color and size. Stock is checked as you go."
-      />
+      <div className="mb-4 flex items-center gap-4">
+        <span className="flex size-14 shrink-0 items-center justify-center rounded-xl bg-brand-100 text-brand">
+          <ShoppingCart className="size-7" strokeWidth={1.9} />
+        </span>
+        <div>
+          <h1 className="text-2xl leading-tight font-extrabold tracking-tight">
+            Create Order (Sales)
+          </h1>
+          <p className="text-sm text-stone-600">
+            Take a new order with customer and product details.
+          </p>
+        </div>
+      </div>
       <FreshOnVisit>
         <OrderForm
           currency={currency}
@@ -91,9 +99,6 @@ export default async function NewOrderPage({
           }}
         />
       </FreshOnVisit>
-      <Link href="/orders" className="mt-3 inline-block text-sm text-stone-600 hover:underline">
-        ← Back to orders
-      </Link>
     </div>
   );
 }

@@ -113,6 +113,10 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
                 <Line label="Discount" value={"− " + formatMoney(order.discount, currency)} />
               )}
               <Line label="Total" value={formatMoney(order.total, currency)} bold />
+              <Line
+                label="To collect on delivery (COD)"
+                value={formatMoney(order.codAmount, currency)}
+              />
             </dl>
           </section>
 
@@ -138,7 +142,7 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
                 </select>
                 {closed && <input type="hidden" name="status" value={order.status} />}
               </Field>
-              <Field label="Tracking number">
+              <Field label="Shipper Ref">
                 <input
                   name="trackingNumber"
                   defaultValue={order.trackingNumber ?? ""}
@@ -146,26 +150,55 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
                 />
               </Field>
             </div>
-            <Field label="Notes">
+            <Field label="Description">
               <textarea name="notes" rows={2} defaultValue={order.notes ?? ""} className="input" />
             </Field>
           </ActionForm>
         </div>
 
-        <aside className="card h-fit space-y-2 p-3 text-sm">
-          <h2 className="text-sm font-bold text-stone-900">Customer</h2>
-          <p>
-            {customer.name}
-            {customer.phone && <span className="block text-stone-600">{customer.phone}</span>}
-          </p>
+        <aside data-order-side className="card h-fit space-y-2 p-3 text-sm">
+          <h2 className="text-sm font-bold text-stone-900">Customer &amp; Shipping</h2>
+          <div>
+            <p className="label">Receiver</p>
+            <p className="font-semibold">{customer.name}</p>
+          </div>
+          <div>
+            <p className="label">Mobile</p>
+            <p>{customer.phone ?? "—"}</p>
+            {order.phone2 && <p className="text-stone-600">{order.phone2} (second)</p>}
+          </div>
           <div>
             <p className="label">Deliver to</p>
-            <p>{order.shippingAddress ?? "No address given"}</p>
+            {order.city || order.area || order.street ? (
+              <p>
+                {order.street && <span className="block">{order.street}</span>}
+                <span className="block">{[order.area, order.city].filter(Boolean).join(", ")}</span>
+                {order.country && <span className="block">{order.country}</span>}
+              </p>
+            ) : (
+              <p>{order.shippingAddress ?? "No address given"}</p>
+            )}
           </div>
           <div>
-            <p className="label">Payment</p>
-            <p>{order.payment === "cod" ? "Cash on delivery" : "Already paid"}</p>
+            <p className="label">COD</p>
+            <p>
+              {order.payment === "cod"
+                ? `Collect ${formatMoney(order.codAmount, currency)} on delivery`
+                : "Already paid — nothing to collect"}
+            </p>
           </div>
+          {order.trackingNumber && (
+            <div>
+              <p className="label">Shipper Ref</p>
+              <p>{order.trackingNumber}</p>
+            </div>
+          )}
+          {order.instruction && (
+            <div>
+              <p className="label">Instruction</p>
+              <p>{order.instruction}</p>
+            </div>
+          )}
           {order.source && (
             <div>
               <p className="label">Came from</p>

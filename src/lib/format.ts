@@ -1,14 +1,14 @@
-export function formatMoney(value: string | number | null, currency: string) {
+// The one currency the whole system works in.
+export const CURRENCY = "AED";
+
+// Money as it is shown everywhere: "AED 1,250.00".
+export function formatMoney(value: string | number | null, currency: string = CURRENCY) {
   const amount = Number(value ?? 0);
-  try {
-    return new Intl.NumberFormat("en", {
-      style: "currency",
-      currency,
-      maximumFractionDigits: amount % 1 === 0 ? 0 : 2,
-    }).format(amount);
-  } catch {
-    return currency + " " + amount.toFixed(2);
-  }
+  const number = new Intl.NumberFormat("en", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(Number.isFinite(amount) ? amount : 0);
+  return `${currency} ${number}`;
 }
 
 export function isTimeZone(value: string) {

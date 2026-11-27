@@ -7,7 +7,6 @@ import { TimeZoneField } from "@/components/time-zone-field";
 import { Field } from "@/components/ui";
 import { db } from "@/db";
 import { users } from "@/db/schema";
-import { CURRENCIES } from "@/lib/currencies";
 
 export default function SetupPage() {
   return (
@@ -30,18 +29,6 @@ export default function SetupPage() {
           <TimeZoneField />
           <Field label="Business name">
             <input name="businessName" required className="input" />
-          </Field>
-          <Field label="Currency">
-            <select name="currency" required defaultValue="" className="input">
-              <option value="" disabled>
-                Choose…
-              </option>
-              {CURRENCIES.map((c) => (
-                <option key={c.code} value={c.code}>
-                  {c.code} — {c.name}
-                </option>
-              ))}
-            </select>
           </Field>
           <Field label="Your name">
             <input name="name" required autoComplete="name" className="input" />

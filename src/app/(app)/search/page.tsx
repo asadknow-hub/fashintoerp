@@ -18,7 +18,7 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
   const like = `%${q}%`;
   const number = /^#?\d+$/.test(q) ? Number(q.replace("#", "")) : null;
 
-  const [foundProducts, foundOrders] = q
+  const [foundProducts, foundOrders, foundCustomers] = q
     ? await Promise.all([
         db
           .select({
@@ -68,13 +68,32 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
             or(
               ilike(customers.name, like),
               ilike(customers.phone, like),
+              ilike(orders.trackingNumber, like),
               number !== null && number < 2 ** 31 ? eq(orders.number, number) : undefined,
             ),
           )
           .orderBy(desc(orders.createdAt))
           .limit(25),
+        db
+          .select({
+            id: customers.id,
+            name: customers.name,
+            phone: customers.phone,
+            city: customers.city,
+            orders: sql<number>`(select count(*)::int from orders where orders.customer_id = customers.id)`,
+          })
+          .from(customers)
+          .where(
+            or(
+              ilike(customers.name, like),
+              ilike(customers.phone, like),
+              ilike(customers.phone2, like),
+            ),
+          )
+          .orderBy(desc(customers.createdAt))
+          .limit(25),
       ])
-    : [[], []];
+    : [[], [], []];
 
   return (
     <>
@@ -82,7 +101,7 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
         title="Search"
         subtitle={q ? `Results for “${q}”` : "Type in the box at the top to search."}
       />
-      {q && foundProducts.length === 0 && foundOrders.length === 0 && (
+      {q && foundProducts.length + foundOrders.length + foundCustomers.length === 0 && (
         <Empty title="Nothing found">
           Try a product name, a SKU, an order number, or a customer&apos;s name or phone.
         </Empty>
@@ -133,6 +152,30 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
                     </span>
                     <Badge tone={orderStatusTone[order.status]}>{order.status}</Badge>
                     <span className="shrink-0 tabular-nums">{formatMoney(order.total, currency)}</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </Block>
+        )}
+        {foundCustomers.length > 0 && (
+          <Block title={`Customers (${foundCustomers.length})`} flush>
+            <ul className="divide-y divide-stone-100 pb-2" data-found-customers>
+              {foundCustomers.map((customer) => (
+                <li key={customer.id}>
+                  <Link
+                    href={`/customers?q=${encodeURIComponent(customer.phone ?? customer.name)}`}
+                    className="flex items-center gap-3 px-4 py-2 text-sm hover:bg-stone-50"
+                  >
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-semibold">{customer.name}</span>
+                      <span className="block truncate text-xs text-stone-500">
+                        {[customer.phone, customer.city].filter(Boolean).join(" · ") || "—"}
+                      </span>
+                    </span>
+                    <span className="shrink-0 tabular-nums text-stone-600">
+                      {customer.orders} {customer.orders === 1 ? "order" : "orders"}
+                    </span>
                   </Link>
                 </li>
               ))}

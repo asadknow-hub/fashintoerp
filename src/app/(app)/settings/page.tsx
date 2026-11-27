@@ -7,7 +7,6 @@ import { db } from "@/db";
 import { users } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
 import { channelStatus, webhookReady } from "@/lib/chat";
-import { CURRENCIES } from "@/lib/currencies";
 import { formatDateTime } from "@/lib/format";
 import { getSettings } from "@/lib/settings";
 import { changePassword, createRecoveryCode, updateBusiness } from "./actions";
@@ -64,18 +63,8 @@ export default async function SettingsPage() {
                   className="input"
                 />
               </Field>
-              <Field label="Currency">
-                <select
-                  name="currency"
-                  defaultValue={business?.currency}
-                  className="input"
-                >
-                  {CURRENCIES.map((c) => (
-                    <option key={c.code} value={c.code}>
-                      {c.code} — {c.name}
-                    </option>
-                  ))}
-                </select>
+              <Field label="Currency" hint="The system works in AED only.">
+                <input value="AED — UAE Dirham" disabled className="input bg-stone-100" />
               </Field>
               <Field
                 label="Time zone"

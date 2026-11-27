@@ -27,7 +27,7 @@ const money = (name: string) => numeric(name, { precision: 12, scale: 2 });
 export const settings = pgTable("settings", {
   id: integer("id").primaryKey().default(1),
   businessName: text("business_name").notNull(),
-  currency: text("currency").notNull().default("USD"),
+  currency: text("currency").notNull().default("AED"),
   timezone: text("timezone").notNull().default("UTC"),
   // When an owner last downloaded a safety copy of the data.
   lastBackupAt: timestamp("last_backup_at", { withTimezone: true }),
@@ -228,9 +228,14 @@ export const customers = pgTable(
     id: id(),
     name: text("name").notNull(),
     phone: text("phone"),
+    // A second number to try when the first doesn't answer.
+    phone2: text("phone2"),
     email: text("email"),
+    // Street, building, apartment.
     address: text("address"),
+    area: text("area"),
     city: text("city"),
+    country: text("country"),
     notes: text("notes"),
     createdAt: createdAt(),
   },
@@ -262,7 +267,18 @@ export const orders = pgTable(
     status: orderStatus("status").notNull().default("new"),
     payment: paymentMethod("payment").notNull().default("cod"),
     source: text("source"),
+    // Where it is going. "shippingAddress" is the same thing as one line.
     shippingAddress: text("shipping_address"),
+    country: text("country"),
+    city: text("city"),
+    area: text("area"),
+    street: text("street"),
+    // The second number the courier can call.
+    phone2: text("phone2"),
+    // How much the courier collects on delivery. Zero when already paid.
+    codAmount: money("cod_amount").notNull().default("0"),
+    // What the courier should know: "call before coming", "leave at reception".
+    instruction: text("instruction"),
     shippingFee: money("shipping_fee").notNull().default("0"),
     discount: money("discount").notNull().default("0"),
     total: money("total").notNull().default("0"),

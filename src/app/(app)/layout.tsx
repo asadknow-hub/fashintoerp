@@ -1,11 +1,12 @@
 import { and, eq, inArray, lte, sql } from "drizzle-orm";
-import { Bell, Box, LogOut, Settings, Truck, TriangleAlert, UserCog } from "lucide-react";
+import { Bell, Box, ChevronDown, LogOut, Settings, Truck, TriangleAlert, UserCog } from "lucide-react";
 import Link from "next/link";
 import { Suspense } from "react";
 import { logout } from "@/app/auth-actions";
 import { Menu } from "@/components/menu";
-import { Nav } from "@/components/nav";
+import { Crumbs, Nav } from "@/components/nav";
 import { SearchBox } from "@/components/search-box";
+import { Shell } from "@/components/shell";
 import { SubmitButton } from "@/components/submit-button";
 import { db } from "@/db";
 import { orders, products, variants } from "@/db/schema";
@@ -14,31 +15,35 @@ import { getSettings } from "@/lib/settings";
 
 export default function AppLayout({ children }: LayoutProps<"/">) {
   return (
-    <div className="min-h-screen md:flex">
-      <aside className="z-20 border-b border-stone-200 bg-stone-100/70 px-3 py-3 md:sticky md:top-0 md:flex md:h-screen md:w-48 md:shrink-0 md:flex-col md:self-start md:border-r md:border-b-0 md:py-4">
-        <Link href="/" className="mb-3 flex items-center gap-2.5 px-2 md:mb-5">
-          <span className="flex size-8 items-center justify-center rounded-lg bg-brand text-white">
-            <Box className="size-[18px]" strokeWidth={2.2} />
-          </span>
-          <span className="truncate text-base font-extrabold tracking-tight">
-            <Suspense fallback="ERP">
-              <BusinessName />
-            </Suspense>
-          </span>
-        </Link>
-        <Suspense>
-          <Nav />
-        </Suspense>
-        {/* Shows which version of the app is live, to make support easier. */}
-        <p className="mt-auto px-3 text-[10px] text-stone-400 max-md:hidden">
-          Version {process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? "dev"}
-        </p>
-      </aside>
-
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-10 flex h-14 items-center gap-3 border-b border-stone-200 bg-white/85 px-3 backdrop-blur md:px-5">
-          <SearchBox />
-          <div className="ml-auto flex items-center gap-1.5">
+    <Shell
+      sidebar={
+        <>
+          <Link href="/" className="mb-5 flex items-center gap-2.5 px-2">
+            <span className="flex size-8 items-center justify-center rounded-lg bg-brand text-white">
+              <Box className="size-[18px]" strokeWidth={2.2} />
+            </span>
+            <span className="truncate text-base font-extrabold tracking-tight">
+              <Suspense fallback="ERP">
+                <BusinessName />
+              </Suspense>
+            </span>
+          </Link>
+          <Suspense>
+            <Nav />
+          </Suspense>
+          {/* Shows which version of the app is live, to make support easier. */}
+          <p className="mt-auto px-3 pt-3 text-[10px] text-stone-400">
+            Version {process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? "dev"}
+          </p>
+        </>
+      }
+      bar={
+        <>
+          <Suspense>
+            <Crumbs />
+          </Suspense>
+          <div className="ml-auto flex min-w-0 items-center gap-1.5 max-sm:flex-1">
+            <SearchBox />
             <Suspense fallback={<Bell className="m-1 size-5 text-stone-400" />}>
               <Alerts />
             </Suspense>
@@ -46,10 +51,11 @@ export default function AppLayout({ children }: LayoutProps<"/">) {
               <UserMenu />
             </Suspense>
           </div>
-        </header>
-        <main className="min-w-0 flex-1 px-3 py-4 md:px-5">{children}</main>
-      </div>
-    </div>
+        </>
+      }
+    >
+      {children}
+    </Shell>
   );
 }
 
@@ -139,12 +145,8 @@ async function UserMenu() {
           <span className="flex size-8 items-center justify-center rounded-full bg-brand-100 text-xs font-bold text-brand">
             {initials}
           </span>
-          <span className="text-left leading-tight max-sm:hidden">
-            <span className="block text-sm font-bold">{user.name.split(" ")[0]}</span>
-            <span className="block text-[11px] text-stone-500">
-              {user.role === "owner" ? "Admin" : "Staff"}
-            </span>
-          </span>
+          <span className="text-sm font-bold max-sm:hidden">{user.name}</span>
+          <ChevronDown className="size-4 text-stone-500 max-sm:hidden" />
         </span>
       }
     >

@@ -179,7 +179,7 @@ export default async function DashboardPage() {
           flush
           aside={
             <Link href="/orders/new" className="text-xs font-semibold underline">
-              New order
+              Create Order
             </Link>
           }
         >

@@ -11,7 +11,6 @@ import {
   hashPassword,
   verifyPassword,
 } from "@/lib/auth";
-import { CURRENCIES } from "@/lib/currencies";
 import { isTimeZone, text } from "@/lib/format";
 
 const MAX_ATTEMPTS = 8;
@@ -64,7 +63,6 @@ export async function setup(
   form: FormData,
 ): Promise<ActionState> {
   const businessName = text(form, "businessName");
-  const currency = text(form, "currency");
   const name = text(form, "name");
   const email = text(form, "email").toLowerCase();
   const password = String(form.get("password") ?? "");
@@ -76,9 +74,6 @@ export async function setup(
   if (password.length < 8) {
     return { error: "Password must be at least 8 characters." };
   }
-  if (!CURRENCIES.some((c) => c.code === currency)) {
-    return { error: "Pick a currency." };
-  }
 
   const passwordHash = await hashPassword(password);
   const userId = await db.transaction(async (tx) => {
@@ -86,7 +81,7 @@ export async function setup(
     await tx.execute(sql`lock table users in exclusive mode`);
     const [{ existing }] = await tx.select({ existing: count() }).from(users);
     if (existing > 0) return null;
-    await tx.insert(settings).values({ id: 1, businessName, currency, timezone });
+    await tx.insert(settings).values({ id: 1, businessName, timezone });
     const [user] = await tx
       .insert(users)
       .values({ name, email, passwordHash, role: "owner" })
