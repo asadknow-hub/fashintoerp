@@ -474,7 +474,7 @@ export default async function ProductPage({
                     </span>
                     <span className="shrink-0 text-right tabular-nums">
                       {purchase.totalCost === null ? (
-                        <span className="text-sm font-semibold text-amber-700">Not recorded</span>
+                        <span className="block text-sm font-semibold text-amber-700">Not recorded</span>
                       ) : (
                         <span className="block text-sm font-semibold">
                           {formatMoney(purchase.totalCost, currency)}
