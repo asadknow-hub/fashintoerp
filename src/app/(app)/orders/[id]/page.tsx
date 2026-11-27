@@ -121,7 +121,7 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
             submit="Save"
             className="card space-y-3 p-3"
           >
-            <h2 className="text-[11px] font-bold tracking-wider text-stone-700 uppercase">Update order</h2>
+            <h2 className="text-sm font-bold text-stone-900">Update order</h2>
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="Status">
                 <select
@@ -153,7 +153,7 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
         </div>
 
         <aside className="card h-fit space-y-2 p-3 text-sm">
-          <h2 className="text-[11px] font-bold tracking-wider text-stone-700 uppercase">Customer</h2>
+          <h2 className="text-sm font-bold text-stone-900">Customer</h2>
           <p>
             {customer.name}
             {customer.phone && <span className="block text-stone-600">{customer.phone}</span>}

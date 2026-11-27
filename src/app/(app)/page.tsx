@@ -1,9 +1,9 @@
 import { and, asc, desc, eq, inArray, lte, notInArray, sql } from "drizzle-orm";
+import { Package, TrendingUp, TriangleAlert, Truck } from "lucide-react";
 import Link from "next/link";
 import { Badge, Block, orderStatusTone, PageHeader, stockTone } from "@/components/ui";
 import { db } from "@/db";
 import {
-  conversations,
   customers,
   orders,
   products,
@@ -12,13 +12,13 @@ import {
   variants,
 } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
-import { formatDate, formatDateTime, formatMoney, variantLabel } from "@/lib/format";
+import { formatDate, formatMoney, variantLabel } from "@/lib/format";
 import { getPrefs } from "@/lib/settings";
 
 export default async function DashboardPage() {
   const [user, { currency, timezone }] = await Promise.all([requireUser(), getPrefs()]);
 
-  const [[sales], [toShip], [chats], lowStock, recentOrders, waiting, [care]] = await Promise.all([
+  const [[sales], [toShip], [onHand], lowStock, recentOrders, [care]] = await Promise.all([
     db
       .select({
         total: sql<string>`coalesce(sum(${orders.total}), 0)`,
@@ -36,9 +36,10 @@ export default async function DashboardPage() {
       .from(orders)
       .where(inArray(orders.status, ["new", "confirmed", "packed"])),
     db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(conversations)
-      .where(sql`${conversations.unread} > 0`),
+      .select({ units: sql<number>`coalesce(sum(${variants.stock}), 0)::int` })
+      .from(variants)
+      .innerJoin(products, eq(products.id, variants.productId))
+      .where(eq(products.archived, false)),
     db
       .select({
         id: variants.id,
@@ -69,19 +70,6 @@ export default async function DashboardPage() {
       .innerJoin(customers, eq(customers.id, orders.customerId))
       .orderBy(desc(orders.createdAt))
       .limit(8),
-    db
-      .select({
-        id: conversations.id,
-        name: conversations.contactName,
-        channel: conversations.channel,
-        lastMessage: conversations.lastMessage,
-        lastMessageAt: conversations.lastMessageAt,
-        unread: conversations.unread,
-      })
-      .from(conversations)
-      .where(sql`${conversations.unread} > 0`)
-      .orderBy(desc(conversations.lastMessageAt))
-      .limit(8),
     // Housekeeping an owner should not forget.
     db
       .select({
@@ -110,28 +98,40 @@ export default async function DashboardPage() {
       value: formatMoney(sales.total, currency),
       note: sales.count === 1 ? "1 order" : `${sales.count} orders`,
       href: "/orders",
+      icon: TrendingUp,
+      tone: "bg-brand-50 border-brand-100",
+      iconTone: "bg-brand-100 text-brand",
     },
     {
       label: "Orders to send out",
-      value: toShip.count,
+      value: String(toShip.count),
       note: "New, confirmed or packed",
       href: "/orders?status=open",
+      icon: Truck,
+      tone: "bg-rose-50 border-rose-100",
+      iconTone: "bg-rose-100 text-rose-600",
     },
     {
-      label: "Chats waiting for a reply",
-      value: chats.count,
-      note: "Unread conversations",
-      href: "/inbox",
+      label: "Stock on hand",
+      value: `${onHand.units} units`,
+      note: "Across all products",
+      href: "/inventory",
+      icon: Package,
+      tone: "bg-emerald-50 border-emerald-100",
+      iconTone: "bg-emerald-100 text-emerald-600",
     },
     {
       label: "Low stock items",
-      value: lowStock.length >= 8 ? "8+" : lowStock.length,
+      value: lowStock.length >= 8 ? "8+" : String(lowStock.length),
       note: "At or below alert level",
       href: "/inventory?view=low",
+      icon: TriangleAlert,
+      tone: "bg-amber-50 border-amber-100",
+      iconTone: "bg-amber-100 text-amber-600",
     },
   ];
 
-  const row = "flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-stone-50";
+  const row = "flex items-center gap-2 px-4 py-2 text-sm hover:bg-stone-50";
 
   return (
     <>
@@ -151,21 +151,31 @@ export default async function DashboardPage() {
         </div>
       )}
 
-      <div className="card mb-3 grid grid-cols-2 gap-px overflow-hidden bg-stone-300 lg:grid-cols-4">
+      <div className="mb-3 grid grid-cols-2 gap-3 lg:grid-cols-4">
         {stats.map((stat) => (
-          <Link key={stat.label} href={stat.href} className="bg-white px-3 py-2 hover:bg-stone-50">
-            <p className="text-[11px] font-semibold tracking-wide text-stone-500 uppercase">
-              {stat.label}
-            </p>
-            <p className="text-2xl leading-tight font-bold tabular-nums">{stat.value}</p>
-            <p className="text-xs text-stone-500">{stat.note}</p>
+          <Link
+            key={stat.label}
+            href={stat.href}
+            className={"flex items-center gap-3 rounded-xl border px-4 py-3 hover:shadow-sm " + stat.tone}
+          >
+            <span className={"flex size-10 shrink-0 items-center justify-center rounded-lg " + stat.iconTone}>
+              <stat.icon className="size-5" strokeWidth={1.9} />
+            </span>
+            <span className="min-w-0">
+              <span className="block truncate text-xs font-medium text-stone-600">{stat.label}</span>
+              <span className="block text-base leading-tight font-extrabold tabular-nums">
+                {stat.value}
+              </span>
+              <span className="block truncate text-[11px] text-stone-500">{stat.note}</span>
+            </span>
           </Link>
         ))}
       </div>
 
-      <div className="grid items-start gap-3 lg:grid-cols-3">
+      <div className="grid items-start gap-3 lg:grid-cols-2">
         <Block
           title="Recent orders"
+          icon={<TrendingUp />}
           flush
           aside={
             <Link href="/orders/new" className="text-xs font-semibold underline">
@@ -192,7 +202,7 @@ export default async function DashboardPage() {
           </div>
         </Block>
 
-        <Block title="Running low" flush>
+        <Block title="Running low" icon={<TriangleAlert />} flush>
           <div className="divide-y divide-stone-100">
             {lowStock.length === 0 && (
               <p className="px-3 py-2 text-sm text-stone-500">Nothing is running low.</p>
@@ -204,31 +214,6 @@ export default async function DashboardPage() {
                   <span className="text-stone-500"> · {variantLabel(item)}</span>
                 </span>
                 <Badge tone={stockTone(item.stock, item.lowStockAt)}>{item.stock} left</Badge>
-              </Link>
-            ))}
-          </div>
-        </Block>
-
-        <Block title="Chats waiting" flush>
-          <div className="divide-y divide-stone-100">
-            {waiting.length === 0 && (
-              <p className="px-3 py-2 text-sm text-stone-500">No one is waiting for a reply.</p>
-            )}
-            {waiting.map((chat) => (
-              <Link key={chat.id} href={`/inbox?c=${chat.id}`} className={row}>
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate font-medium">
-                    {chat.name ?? "Customer"}
-                    <span className="font-normal text-stone-500"> · {chat.channel}</span>
-                  </span>
-                  <span className="block truncate text-xs text-stone-500">{chat.lastMessage}</span>
-                </span>
-                <span className="shrink-0 text-right text-xs text-stone-500">
-                  {formatDateTime(chat.lastMessageAt, timezone)}
-                </span>
-                <span className="rounded-full bg-rose-700 px-1.5 text-xs font-semibold text-white">
-                  {chat.unread}
-                </span>
               </Link>
             ))}
           </div>

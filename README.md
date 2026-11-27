@@ -4,7 +4,10 @@ One place to run the business: stock, orders, customers and customer chats.
 
 ## What it does
 
-- **Inventory** — products with a size × color stock grid, photos and videos with tags, low-stock alerts, and a history of every stock change.
+- **Products and Inventory** — a photo gallery and a stock table of the same products. Each product page shows its photos, details, purchase batches, a size × color stock grid, sales summary and recent stock activity.
+- **Purchases** — every batch of stock bought and what was paid for it.
+- **Reports** — sales, units sold, best sellers and what the stock is worth.
+- **Search** — products by name or SKU, orders by number or customer, from the box at the top of every page.
 - **Orders** — create an order, stock goes down automatically. Cancel or return it, stock goes back.
 - **Customers** — saved automatically from orders (matched by phone number).
 - **Inbox** — WhatsApp, Instagram and Messenger chats in one screen, with saved replies and keyword auto replies.

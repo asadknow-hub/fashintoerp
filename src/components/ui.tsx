@@ -10,10 +10,10 @@ export function PageHeader({
   action?: { href: string; label: string };
 }) {
   return (
-    <div className="mb-3 flex flex-wrap items-end justify-between gap-3 border-b-2 border-stone-900 pb-2">
+    <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
       <div>
         <h1 className="text-xl leading-tight font-bold tracking-tight">{title}</h1>
-        {subtitle && <p className="text-xs text-stone-500">{subtitle}</p>}
+        {subtitle && <p className="mt-0.5 text-xs text-stone-500">{subtitle}</p>}
       </div>
       {action && (
         <Link href={action.href} className="btn">
@@ -27,12 +27,17 @@ export function PageHeader({
 // A titled box. Pages are built out of these so everything has a clear place.
 export function Block({
   title,
+  subtitle,
+  icon,
   aside,
   children,
   flush = false,
   className,
 }: {
   title: string;
+  subtitle?: string;
+  // A small picture shown before the title.
+  icon?: React.ReactNode;
   aside?: React.ReactNode;
   children: React.ReactNode;
   flush?: boolean;
@@ -40,11 +45,17 @@ export function Block({
 }) {
   return (
     <section className={"card overflow-hidden " + (className ?? "")}>
-      <header className="flex min-h-9 flex-wrap items-center justify-between gap-2 border-b border-stone-300 bg-stone-100 px-3 py-1">
-        <h2 className="text-[11px] font-bold tracking-wider text-stone-700 uppercase">{title}</h2>
+      <header className="flex min-h-11 flex-wrap items-center justify-between gap-2 px-4 pt-3 pb-2">
+        <div className="flex items-center gap-2.5">
+          {icon && <span className="text-brand [&>svg]:size-[18px]">{icon}</span>}
+          <div>
+            <h2 className="text-sm leading-tight font-bold text-stone-900">{title}</h2>
+            {subtitle && <p className="text-[11px] text-stone-500">{subtitle}</p>}
+          </div>
+        </div>
         {aside}
       </header>
-      <div className={flush ? "" : "p-3"}>{children}</div>
+      <div className={flush ? "" : "px-4 pb-4"}>{children}</div>
     </section>
   );
 }

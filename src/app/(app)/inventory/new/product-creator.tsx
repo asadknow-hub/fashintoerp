@@ -44,18 +44,18 @@ function ChipInput({
   return (
     <div>
       <span className="label">{label}</span>
-      <div className="flex min-h-9 flex-wrap items-center gap-1 rounded-md border border-stone-300 bg-white px-1.5 py-1 focus-within:border-stone-900 focus-within:ring-1 focus-within:ring-stone-900">
+      <div className="flex min-h-9 flex-wrap items-center gap-1 rounded-md border border-stone-300 bg-white px-1.5 py-1 focus-within:border-brand focus-within:ring-1 focus-within:ring-brand">
         {values.map((value) => (
           <span
             key={value}
-            className="inline-flex items-center gap-1 rounded-md bg-stone-900 py-0.5 pr-1 pl-2 text-xs font-medium text-white"
+            className="inline-flex items-center gap-1 rounded-md bg-brand py-0.5 pr-1 pl-2 text-xs font-medium text-white"
           >
             {value}
             <button
               type="button"
               aria-label={`Remove ${value}`}
               onClick={() => onChange(values.filter((item) => item !== value))}
-              className="size-4 cursor-pointer rounded text-stone-300 hover:bg-stone-700 hover:text-white"
+              className="size-4 cursor-pointer rounded text-stone-300 hover:bg-brand-700 hover:text-white"
             >
               ×
             </button>
@@ -347,24 +347,20 @@ function Editor({
               </div>
             }
           >
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto px-4 pb-4">
               <table className="w-full border-collapse text-sm tabular-nums">
                 <thead>
-                  <tr className="border-b border-stone-300 text-xs text-stone-500">
-                    <th className="w-32 px-3 py-1.5 text-left font-medium whitespace-nowrap">
-                      Color ↓ / Size →
-                    </th>
+                  <tr>
+                    <th className="th w-36 rounded-l-lg">Color</th>
                     {columns.map((size) => (
                       <th
                         key={size ?? "-"}
-                        className="min-w-14 px-2 py-1.5 text-center font-semibold text-stone-800"
+                        className="th min-w-14 text-center"
                       >
                         {size ?? "One size"}
                       </th>
                     ))}
-                    <th className="w-20 border-l border-stone-300 bg-stone-50 px-3 py-1.5 text-right font-medium">
-                      Total
-                    </th>
+                    <th className="th w-20 rounded-r-lg text-center">Total</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -389,21 +385,21 @@ function Editor({
                           />
                         </td>
                       ))}
-                      <td className="border-l border-stone-300 bg-stone-50 px-3 py-1.5 text-right font-semibold">
+                      <td className="bg-stone-50 px-3 py-1.5 text-center font-bold">
                         {rowTotal(color)}
                       </td>
                     </tr>
                   ))}
                 </tbody>
                 <tfoot>
-                  <tr className="bg-stone-50 font-semibold">
-                    <th className="px-3 py-1.5 text-left">Total</th>
+                  <tr className="bg-brand-100 font-bold">
+                    <th className="rounded-l-lg px-3 py-2 text-left">Total</th>
                     {columns.map((size) => (
                       <td key={size ?? "-"} className="px-2 py-1.5 text-center">
                         {columnTotal(size)}
                       </td>
                     ))}
-                    <td className="border-l border-stone-300 bg-stone-900 px-3 py-1.5 text-right text-white">
+                    <td className="rounded-r-lg bg-brand px-3 py-2 text-center text-white">
                       {total}
                     </td>
                   </tr>
@@ -414,35 +410,37 @@ function Editor({
         </div>
 
         <div className="min-w-0 lg:col-start-2 lg:row-start-1 2xl:col-start-1">
-          <MediaManager
-            mode={mode}
-            offReason={offReason}
-            folder="products/new"
-            items={form.media}
-            onBusy={setUploading}
-            onAdd={async (item) => {
-              setForm((current) => ({
-                ...current,
-                media: [...current.media, { ...item, id: item.url }],
-              }));
-              return null;
-            }}
-            onTag={async (id, tag) => {
-              setForm((current) => ({
-                ...current,
-                media: current.media.map((item) => (item.id === id ? { ...item, tag } : item)),
-              }));
-              return null;
-            }}
-            onRemove={async (id) => {
-              const gone = form.media.find((item) => item.id === id);
-              setForm((current) => ({
-                ...current,
-                media: current.media.filter((item) => item.id !== id),
-              }));
-              return gone ? (await discardUpload(gone.url, gone.thumbUrl))?.error : null;
-            }}
-          />
+          <Block title="Photos & videos">
+            <MediaManager
+              mode={mode}
+              offReason={offReason}
+              folder="products/new"
+              items={form.media}
+              onBusy={setUploading}
+              onAdd={async (item) => {
+                setForm((current) => ({
+                  ...current,
+                  media: [...current.media, { ...item, id: item.url }],
+                }));
+                return null;
+              }}
+              onTag={async (id, tag) => {
+                setForm((current) => ({
+                  ...current,
+                  media: current.media.map((item) => (item.id === id ? { ...item, tag } : item)),
+                }));
+                return null;
+              }}
+              onRemove={async (id) => {
+                const gone = form.media.find((item) => item.id === id);
+                setForm((current) => ({
+                  ...current,
+                  media: current.media.filter((item) => item.id !== id),
+                }));
+                return gone ? (await discardUpload(gone.url, gone.thumbUrl))?.error : null;
+              }}
+            />
+          </Block>
         </div>
 
         <div className="min-w-0 space-y-3 lg:col-start-2 lg:row-start-2 2xl:col-start-3 2xl:row-start-1">

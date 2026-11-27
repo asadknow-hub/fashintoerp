@@ -101,7 +101,7 @@ export default async function InboxPage({ searchParams }: PageProps<"/inbox">) {
                 className={
                   "rounded-full px-3 py-1.5 text-xs font-medium " +
                   (showClosed === tab.closed
-                    ? "bg-stone-900 text-white"
+                    ? "bg-brand text-white"
                     : "text-stone-600 hover:bg-stone-100")
                 }
               >
@@ -197,7 +197,7 @@ export default async function InboxPage({ searchParams }: PageProps<"/inbox">) {
                         (m.direction === "out"
                           ? m.status === "failed"
                             ? "bg-rose-100 text-rose-900"
-                            : "bg-stone-900 text-white"
+                            : "bg-brand text-white"
                           : "border border-stone-200 bg-white")
                       }
                     >

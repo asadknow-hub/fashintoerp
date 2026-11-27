@@ -45,7 +45,7 @@ const blank = (key: number): Row => ({
   unitPrice: "",
 });
 
-const sectionTitle = "text-[11px] font-bold tracking-wider text-stone-700 uppercase";
+const sectionTitle = "text-sm font-bold text-stone-900";
 const left = (n: number) => (n > 0 ? `${n} left` : "out of stock");
 
 /* ---------- Product search box ---------- */

@@ -1,10 +1,22 @@
-import { asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, isNotNull, notInArray, sql } from "drizzle-orm";
+import {
+  Box,
+  Calculator,
+  ChartColumn,
+  Coins,
+  History,
+  Package,
+  PackageCheck,
+  ShoppingCart,
+} from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ActionForm } from "@/components/action-form";
-import { Badge, Block, Field } from "@/components/ui";
+import { Block, Field } from "@/components/ui";
 import { db } from "@/db";
 import {
+  orderItems,
+  orders,
   productMedia,
   products,
   stockCountLines,
@@ -15,35 +27,26 @@ import {
   variants,
 } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
-import { formatDateTime, formatMoney, isUuid, sortSizes } from "@/lib/format";
+import { formatDate, formatDateTime, formatMoney, isUuid, sortSizes, variantLabel } from "@/lib/format";
 import { mediaMode, mediaOffReason } from "@/lib/media";
 import { getPrefs } from "@/lib/settings";
-import {
-  addPurchase,
-  addVariants,
-  deletePurchase,
-  setArchived,
-  updateProduct,
-  updatePurchase,
-  updateVariants,
-} from "../actions";
-import { MediaBlock } from "./media-block";
+import { addVariants, updateVariants } from "../actions";
+import { ProductTop } from "./product-top";
+import { PurchaseBatches } from "./purchase-batches";
 import { StockGrid } from "./stock-grid";
-import { SubmitButton } from "@/components/submit-button";
 
+// How each kind of stock change reads in "Recent Stock Activity".
 const reasonLabel = {
   opening: "Opening stock",
-  purchase: "Stock received",
-  sale: "Order",
+  purchase: "Received stock",
+  sale: "Sold",
   return: "Customer return",
   cancelled: "Order cancelled",
   damage: "Damaged / lost",
   adjustment: "Stock set from a count",
 } as const;
 
-export default async function ProductPage({
-  params,
-}: PageProps<"/inventory/[id]">) {
+export default async function ProductPage({ params }: PageProps<"/inventory/[id]">) {
   await requireUser();
   const { id } = await params;
   if (!isUuid(id)) notFound();
@@ -58,6 +61,9 @@ export default async function ProductPage({
     countRows,
     countLines,
     purchases,
+    movementTotals,
+    [sales],
+    categoryRows,
   ] = await Promise.all([
     db.select().from(products).where(eq(products.id, id)),
     getPrefs(),
@@ -85,7 +91,8 @@ export default async function ProductPage({
         reason: stockMovements.reason,
         note: stockMovements.note,
         createdAt: stockMovements.createdAt,
-        sku: variants.sku,
+        size: variants.size,
+        color: variants.color,
         userName: users.name,
       })
       .from(stockMovements)
@@ -118,7 +125,7 @@ export default async function ProductPage({
       .from(stockCountLines)
       .innerJoin(stockCounts, eq(stockCounts.id, stockCountLines.countId))
       .where(eq(stockCounts.productId, id)),
-    // What each lot of stock was bought for, newest first.
+    // What each lot of stock was bought for, oldest first.
     db
       .select({
         id: stockPurchases.id,
@@ -126,13 +133,36 @@ export default async function ProductPage({
         totalCost: stockPurchases.totalCost,
         note: stockPurchases.note,
         createdAt: stockPurchases.createdAt,
-        by: users.name,
       })
       .from(stockPurchases)
-      .leftJoin(users, eq(users.id, stockPurchases.createdBy))
       .where(eq(stockPurchases.productId, id))
-      .orderBy(desc(stockPurchases.createdAt))
-      .limit(100),
+      .orderBy(asc(stockPurchases.createdAt))
+      .limit(200),
+    // Every stock change ever made to this product, added up by kind.
+    db
+      .select({
+        reason: stockMovements.reason,
+        total: sql<number>`sum(${stockMovements.change})::int`,
+      })
+      .from(stockMovements)
+      .innerJoin(variants, eq(variants.id, stockMovements.variantId))
+      .where(eq(variants.productId, id))
+      .groupBy(stockMovements.reason),
+    // Money taken for this product on orders that were not cancelled or returned.
+    db
+      .select({
+        revenue: sql<string>`coalesce(sum(${orderItems.quantity} * ${orderItems.unitPrice}), 0)`,
+      })
+      .from(orderItems)
+      .innerJoin(orders, eq(orders.id, orderItems.orderId))
+      .innerJoin(variants, eq(variants.id, orderItems.variantId))
+      .where(
+        and(eq(variants.productId, id), notInArray(orders.status, ["cancelled", "returned"])),
+      ),
+    db
+      .selectDistinct({ category: products.category })
+      .from(products)
+      .where(isNotNull(products.category)),
   ]);
   if (!product) notFound();
 
@@ -145,94 +175,132 @@ export default async function ProductPage({
       sizes.indexOf(a.size) - sizes.indexOf(b.size),
   );
 
-  const units = items.reduce((sum, v) => sum + v.stock, 0);
-  const costValue = items.reduce((sum, v) => sum + v.stock * Number(v.cost), 0);
-  const retailValue = items.reduce(
-    (sum, v) => sum + v.stock * Number(v.price),
-    0,
-  );
-  const out = items.filter((v) => v.stock <= 0).length;
-  const low = items.filter(
-    (v) => v.stock > 0 && v.stock <= v.lowStockAt,
-  ).length;
+  /* ---------- The numbers ---------- */
+
+  const moved = (reason: (typeof movementTotals)[number]["reason"]) =>
+    movementTotals.find((row) => row.reason === reason)?.total ?? 0;
+  // Stock that came in, stock that went out on orders (returns and cancelled
+  // orders put some back), and everything else: damage and count corrections.
+  const purchased = moved("opening") + moved("purchase");
+  const sold = -(moved("sale") + moved("return") + moved("cancelled"));
+  const other = moved("damage") + moved("adjustment");
+  const available = items.reduce((sum, v) => sum + v.stock, 0);
 
   const priced = purchases.filter((purchase) => purchase.totalCost !== null);
   const paidTotal = priced.reduce((sum, purchase) => sum + Number(purchase.totalCost), 0);
-  const paidPieces = priced.reduce((sum, purchase) => sum + purchase.units, 0);
-  const unpriced = purchases.length - priced.length;
+  const paidUnits = priced.reduce((sum, purchase) => sum + purchase.units, 0);
+  // What one piece cost on average: from the purchase batches when they have
+  // amounts, otherwise from the cost typed on each size and color.
+  const shelfCost = items.reduce((sum, v) => sum + v.stock * Number(v.cost), 0);
+  const averageCost = paidUnits
+    ? paidTotal / paidUnits
+    : available
+      ? shelfCost / available
+      : Number(items[0]?.cost ?? 0);
+  const inventoryValue = paidUnits ? available * averageCost : shelfCost;
 
-  const stats = [
-    { label: "In stock", value: `${units} units` },
+  const prices = [...new Set(items.map((v) => Number(v.price)))];
+
+  const cards = [
     {
-      label: "Paid for stock (total)",
-      value: priced.length ? formatMoney(paidTotal, currency) : "Not recorded",
-      tone: priced.length ? "" : "text-stone-400",
-    },
-    { label: "Stock value (cost)", value: formatMoney(costValue, currency) },
-    {
-      label: "Stock value (selling)",
-      value: formatMoney(retailValue, currency),
+      label: "Purchased Units",
+      value: `${purchased} units`,
+      icon: Box,
+      tone: "bg-brand-50 border-brand-100",
+      iconTone: "bg-brand-100 text-brand",
     },
     {
-      label: "Needs attention",
-      value: out || low ? `${out} out · ${low} low` : "All good",
-      tone: out ? "text-rose-700" : low ? "text-amber-700" : "text-emerald-700",
+      label: "Units Sold",
+      value: `${sold} units`,
+      icon: ShoppingCart,
+      tone: "bg-rose-50 border-rose-100",
+      iconTone: "bg-rose-100 text-rose-600",
+    },
+    {
+      label: "Available Stock",
+      value: `${available} units`,
+      icon: Package,
+      tone: "bg-emerald-50 border-emerald-100",
+      iconTone: "bg-emerald-100 text-emerald-600",
+    },
+    {
+      label: "Inventory Value (at cost)",
+      value: formatMoney(inventoryValue, currency),
+      icon: Coins,
+      tone: "bg-brand-50 border-brand-100",
+      iconTone: "bg-brand-100 text-brand",
     },
   ];
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-end justify-between gap-3 border-b-2 border-stone-900 pb-2">
-        <div className="min-w-0">
-          <Link
-            href="/inventory"
-            className="text-xs text-stone-500 hover:underline"
-          >
-            ← Inventory
-          </Link>
-          <h1 className="flex items-center gap-2 text-xl leading-tight font-bold tracking-tight">
-            <span className="truncate">{product.name}</span>
-            {product.archived && <Badge>Archived</Badge>}
-          </h1>
-          <p className="text-xs text-stone-500">
-            {[
-              product.category,
-              `${colors.length} ${colors.length === 1 ? "color" : "colors"}`,
-              `${sizes.length} ${sizes.length === 1 ? "size" : "sizes"}`,
-            ]
-              .filter(Boolean)
-              .join(" · ")}
-          </p>
-        </div>
-        <form action={setArchived.bind(null, product.id, !product.archived)}>
-          <SubmitButton>
-            {product.archived ? "Restore product" : "Archive product"}
-          </SubmitButton>
-        </form>
-      </div>
+      <ProductTop
+        product={{
+          id: product.id,
+          name: product.name,
+          description: product.description,
+          category: product.category,
+          sku: product.sku,
+          archived: product.archived,
+        }}
+        categories={categoryRows.map((row) => row.category!).filter(Boolean)}
+        price={{ value: prices.length === 1 ? String(prices[0]) : "", varies: prices.length > 1 }}
+        currency={currency}
+        metrics={{
+          averageCost: formatMoney(averageCost, currency),
+          available: `${available} units`,
+          purchasedValue: formatMoney(paidTotal, currency),
+        }}
+        media={media}
+        mode={mediaMode()}
+        offReason={mediaOffReason()}
+      />
 
-      <dl className="card grid grid-cols-2 gap-px overflow-hidden bg-stone-300 lg:grid-cols-5">
-        {stats.map((stat) => (
-          <div
-            key={stat.label}
-            className="bg-white px-3 py-1.5 max-lg:last:col-span-2"
-          >
-            <dt className="text-xs text-stone-500">{stat.label}</dt>
-            <dd
-              className={
-                "mt-0.5 text-base font-semibold tabular-nums " +
-                (stat.tone ?? "")
-              }
-            >
-              {stat.value}
-            </dd>
+      <dl className="grid grid-cols-2 gap-3 lg:grid-cols-4" data-stat-cards>
+        {cards.map((card) => (
+          <div key={card.label} className={"flex items-center gap-3 rounded-xl border px-4 py-3 " + card.tone}>
+            <span className={"flex size-10 shrink-0 items-center justify-center rounded-lg " + card.iconTone}>
+              <card.icon className="size-5" strokeWidth={1.9} />
+            </span>
+            <div className="min-w-0">
+              <dt className="truncate text-xs font-medium text-stone-600">{card.label}</dt>
+              <dd className="text-base leading-tight font-extrabold tabular-nums">{card.value}</dd>
+            </div>
           </div>
         ))}
       </dl>
 
-      <div className="grid items-start gap-3 lg:grid-cols-[minmax(0,1fr)_19rem] 2xl:grid-cols-[19rem_minmax(0,1fr)_21rem]">
-        <div className="min-w-0 space-y-3 lg:col-start-1 lg:row-span-2 lg:row-start-1 2xl:col-start-2 2xl:row-span-1">
+      <p
+        data-stock-formula
+        className="flex flex-wrap items-center justify-center gap-x-2 rounded-xl border border-brand-100 bg-brand-100 px-4 py-2.5 text-sm font-bold tabular-nums"
+      >
+        <Calculator className="size-4 text-brand" />
+        <span className="text-brand">Stock Formula:</span>
+        <span>
+          {purchased} purchased − {sold} sold
+          {other < 0 && ` − ${-other} damaged or corrected`}
+          {other > 0 && ` + ${other} corrected`} = {available} available
+        </span>
+      </p>
+
+      <div className="grid items-start gap-3 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
+        <div className="min-w-0 space-y-3">
+          <PurchaseBatches
+            productId={product.id}
+            currency={currency}
+            unitsInStock={available}
+            batches={purchases.map((purchase) => ({
+              id: purchase.id,
+              date: formatDate(purchase.createdAt, timezone),
+              note: purchase.note,
+              units: purchase.units,
+              totalCost: purchase.totalCost === null ? null : Number(purchase.totalCost),
+            }))}
+          />
+
           <StockGrid
+            productId={product.id}
+            currency={currency}
             variants={items.map((v) => ({
               id: v.id,
               size: v.size,
@@ -242,361 +310,76 @@ export default async function ProductPage({
             }))}
             sizes={sizes}
             colors={colors}
-            productId={product.id}
-            currency={currency}
             counts={countRows.map((count) => ({
               id: count.id,
               note: count.note,
               when: formatDateTime(count.createdAt, timezone),
               by: count.by,
-              applied: count.appliedAt
-                ? formatDateTime(count.appliedAt, timezone)
-                : null,
+              applied: count.appliedAt ? formatDateTime(count.appliedAt, timezone) : null,
               lines: countLines
                 .filter((line) => line.countId === count.id)
-                .map(({ variantId, counted, system }) => ({
-                  variantId,
-                  counted,
-                  system,
-                })),
+                .map(({ variantId, counted, system }) => ({ variantId, counted, system })),
             }))}
           />
-
-          <Block title="Prices & codes" flush>
-            <ActionForm
-              action={updateVariants.bind(null, product.id)}
-              submit="Save changes"
-              submitClassName="btn btn-sm"
-              footerClassName="flex flex-row-reverse items-center justify-between gap-3 border-t border-stone-200 px-4 py-2.5"
-            >
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[36rem] border-collapse text-sm">
-                  <thead>
-                    <tr className="border-b border-stone-200 text-left text-xs text-stone-500">
-                      <th className="py-2 pr-2 pl-4 font-medium">Color</th>
-                      <th className="px-2 py-2 font-medium">Size</th>
-                      <th className="px-2 py-2 font-medium">SKU</th>
-                      <th className="px-2 py-2 text-right font-medium">
-                        Price
-                      </th>
-                      <th className="px-2 py-2 text-right font-medium">Cost</th>
-                      <th className="px-2 py-2 text-right font-medium whitespace-nowrap">
-                        Alert at
-                      </th>
-                      <th className="py-2 pr-4 pl-2 text-right font-medium">
-                        Stock
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-stone-100">
-                    {items.map((v) => (
-                      <tr key={v.id}>
-                        <td className="w-28 py-0.5 pr-0.5 pl-2">
-                          <input
-                            name={`color:${v.id}`}
-                            defaultValue={v.color ?? ""}
-                            aria-label="Color"
-                            placeholder="—"
-                            className="cell font-medium"
-                          />
-                        </td>
-                        <td className="w-16 p-0.5">
-                          <input
-                            name={`size:${v.id}`}
-                            defaultValue={v.size ?? ""}
-                            aria-label="Size"
-                            placeholder="—"
-                            className="cell"
-                          />
-                        </td>
-                        <td className="min-w-36 p-0.5">
-                          <input
-                            name={`sku:${v.id}`}
-                            defaultValue={v.sku}
-                            aria-label="SKU"
-                            required
-                            className="cell font-mono text-xs"
-                          />
-                        </td>
-                        <td className="w-20 p-0.5">
-                          <input
-                            name={`price:${v.id}`}
-                            defaultValue={Number(v.price)}
-                            aria-label="Price"
-                            inputMode="decimal"
-                            className="cell text-right tabular-nums"
-                          />
-                        </td>
-                        <td className="w-20 p-0.5">
-                          <input
-                            name={`cost:${v.id}`}
-                            defaultValue={Number(v.cost)}
-                            aria-label="Cost"
-                            inputMode="decimal"
-                            className="cell text-right tabular-nums"
-                          />
-                        </td>
-                        <td className="w-16 p-0.5">
-                          <input
-                            name={`low:${v.id}`}
-                            defaultValue={v.lowStockAt}
-                            aria-label="Low stock alert"
-                            inputMode="numeric"
-                            className="cell text-right tabular-nums"
-                          />
-                        </td>
-                        <td className="w-16 py-1.5 pr-4 pl-2 text-right tabular-nums">
-                          {v.stock}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                  <tfoot>
-                    <tr className="border-t border-stone-200 bg-stone-50 font-semibold">
-                      <td className="py-2 pr-2 pl-4" colSpan={6}>
-                        Total · {items.length}{" "}
-                        {items.length === 1 ? "item" : "items"}
-                      </td>
-                      <td className="py-2 pr-4 pl-2 text-right tabular-nums">
-                        {units}
-                      </td>
-                    </tr>
-                  </tfoot>
-                </table>
-              </div>
-            </ActionForm>
-          </Block>
-
-          <Block title="Add a size or color">
-            <ActionForm
-              action={addVariants.bind(null, product.id)}
-              submit="Add"
-              submitClassName="btn btn-sm"
-              className="grid grid-cols-3 items-end gap-3 sm:grid-cols-[1fr_1fr_6rem_auto]"
-              footerClassName="max-sm:col-span-3 flex flex-wrap items-center gap-3 sm:flex-row-reverse sm:pb-0.5"
-            >
-              <Field label="New size">
-                <input name="size" placeholder="XL" className="input py-1.5" />
-              </Field>
-              <Field label="New color">
-                <input
-                  name="color"
-                  placeholder="Navy"
-                  className="input py-1.5"
-                />
-              </Field>
-              <Field label="Stock each">
-                <input
-                  name="stock"
-                  inputMode="numeric"
-                  defaultValue="0"
-                  className="input py-1.5"
-                />
-              </Field>
-            </ActionForm>
-            <p className="mt-2 text-xs text-stone-500">
-              A new size is added to every color, and a new color gets every
-              size. Fill in both to add just that one.
-            </p>
-          </Block>
         </div>
 
-        <div className="min-w-0 lg:col-start-2 lg:row-start-1 2xl:col-start-1">
-          <MediaBlock
-            productId={product.id}
-            items={media}
-            mode={mediaMode()}
-            offReason={mediaOffReason()}
-          />
-        </div>
-
-        <div className="min-w-0 space-y-3 lg:col-start-2 lg:row-start-2 2xl:col-start-3 2xl:row-start-1">
-          <Block title="Details">
-            <ActionForm
-              action={updateProduct.bind(null, product.id)}
-              submit="Save"
-              submitClassName="btn-secondary btn-sm"
-              className="space-y-3"
-            >
-              <Field label="Name">
-                <input
-                  name="name"
-                  defaultValue={product.name}
-                  required
-                  className="input py-1.5"
-                />
-              </Field>
-              <Field label="Category">
-                <input
-                  name="category"
-                  defaultValue={product.category ?? ""}
-                  className="input py-1.5"
-                />
-              </Field>
-              <Field label="Description">
-                <textarea
-                  name="description"
-                  defaultValue={product.description ?? ""}
-                  rows={3}
-                  className="input py-1.5"
-                />
-              </Field>
-            </ActionForm>
-          </Block>
-
-          <Block
-            title="What the stock was bought for"
-            flush
-            aside={
-              <span className="text-xs text-stone-600 tabular-nums">
-                {priced.length
-                  ? `${formatMoney(paidTotal, currency)} for ${paidPieces} pieces`
-                  : "Nothing recorded yet"}
-              </span>
-            }
-          >
-            <div className="divide-y divide-stone-100" data-purchases>
-              {unpriced > 0 && (
-                <p className="bg-amber-50 px-3 py-1.5 text-xs text-amber-900">
-                  {unpriced} {unpriced === 1 ? "lot has" : "lots have"} no amount yet. Open it and
-                  type what you paid.
-                </p>
-              )}
-              {purchases.map((purchase) => (
-                <details key={purchase.id} data-purchase className="group">
-                  <summary className="flex cursor-pointer list-none items-start gap-2 px-3 py-1.5 text-xs hover:bg-stone-50">
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-sm">{purchase.note ?? "Stock"}</span>
-                      <span className="text-stone-500">
-                        {formatDateTime(purchase.createdAt, timezone)}
-                        {purchase.by ? ` · ${purchase.by}` : ""}
-                      </span>
-                    </span>
-                    <span className="shrink-0 text-right tabular-nums">
-                      {purchase.totalCost === null ? (
-                        <span className="block text-sm font-semibold text-amber-700">Not recorded</span>
-                      ) : (
-                        <span className="block text-sm font-semibold">
-                          {formatMoney(purchase.totalCost, currency)}
-                        </span>
-                      )}
-                      <span className="text-stone-500">
-                        {purchase.units} pcs
-                        {purchase.totalCost !== null &&
-                          ` · ${formatMoney(Number(purchase.totalCost) / purchase.units, currency)} each`}
-                      </span>
-                    </span>
-                    <span className="mt-0.5 shrink-0 text-stone-400 group-open:hidden">Edit</span>
-                    <span className="mt-0.5 hidden shrink-0 text-stone-400 group-open:inline">
-                      Close
-                    </span>
-                  </summary>
-                  <div className="space-y-2 bg-stone-50 px-3 py-2">
-                    <ActionForm
-                      action={updatePurchase.bind(null, purchase.id)}
-                      submit="Save"
-                      submitClassName="btn btn-sm"
-                      className="grid grid-cols-2 gap-2"
-                      footerClassName="col-span-2 flex items-center gap-2"
-                    >
-                      <Field label="Total paid">
-                        <input
-                          name="totalPaid"
-                          inputMode="decimal"
-                          defaultValue={
-                            purchase.totalCost === null ? "" : Number(purchase.totalCost)
-                          }
-                          className="input"
-                        />
-                      </Field>
-                      <Field label="Pieces">
-                        <input
-                          name="units"
-                          inputMode="numeric"
-                          defaultValue={purchase.units}
-                          className="input"
-                        />
-                      </Field>
-                      <Field label="Note" className="col-span-2">
-                        <input name="note" defaultValue={purchase.note ?? ""} className="input" />
-                      </Field>
-                    </ActionForm>
-                    <ActionForm
-                      action={deletePurchase.bind(null, purchase.id)}
-                      submit="Delete this record"
-                      submitClassName="cursor-pointer text-xs text-rose-700 underline"
-                      confirm="Delete this cost record? Stock will not change."
-                    />
-                  </div>
-                </details>
+        <div className="min-w-0 space-y-3">
+          <Block title="Sales Summary" icon={<ChartColumn />}>
+            <dl className="space-y-2 text-sm" data-sales-summary>
+              {[
+                { label: "Units Sold", value: String(sold), icon: ShoppingCart },
+                {
+                  label: "Revenue Generated",
+                  value: formatMoney(sales.revenue, currency),
+                  icon: Coins,
+                },
+                { label: "Remaining Units", value: String(available), icon: PackageCheck },
+              ].map((row) => (
+                <div key={row.label} className="flex items-center gap-3">
+                  <row.icon className="size-4 shrink-0 text-brand" />
+                  <dt className="min-w-0 flex-1 font-semibold">{row.label}</dt>
+                  <dd className="w-36 rounded-lg bg-brand-50 px-3 py-1.5 text-right font-bold tabular-nums">
+                    {row.value}
+                  </dd>
+                </div>
               ))}
-              <details className="group">
-                <summary className="cursor-pointer list-none px-3 py-1.5 text-xs font-medium text-stone-700 hover:bg-stone-50">
-                  + Record what stock cost
-                </summary>
-                <ActionForm
-                  action={addPurchase.bind(null, product.id)}
-                  submit="Save"
-                  submitClassName="btn btn-sm"
-                  className="grid grid-cols-2 gap-2 bg-stone-50 px-3 py-2"
-                  footerClassName="col-span-2 flex items-center gap-2"
-                >
-                  <Field label="Total paid">
-                    <input name="totalPaid" inputMode="decimal" required className="input" />
-                  </Field>
-                  <Field label="For how many pieces">
-                    <input
-                      name="units"
-                      inputMode="numeric"
-                      defaultValue={units || ""}
-                      required
-                      className="input"
-                    />
-                  </Field>
-                  <Field label="Note" className="col-span-2">
-                    <input name="note" placeholder="Supplier, invoice…" className="input" />
-                  </Field>
-                  <p className="col-span-2 text-[11px] text-stone-500">
-                    This only records the money. It does not add or remove stock.
-                  </p>
-                </ActionForm>
-              </details>
-            </div>
+            </dl>
+            <Link
+              href={`/orders?product=${product.id}`}
+              className="mt-3 inline-block text-xs font-semibold text-brand hover:underline"
+            >
+              See the orders for this product →
+            </Link>
           </Block>
 
-          <Block title="Stock history" flush>
-            <div className="max-h-96 divide-y divide-stone-100 overflow-y-auto">
+          <Block title="Recent Stock Activity" icon={<History />} flush>
+            <div className="max-h-96 overflow-y-auto px-4 pb-3" data-activity>
               {history.length === 0 && (
-                <p className="p-4 text-sm text-stone-500">
-                  No stock changes yet.
-                </p>
+                <p className="py-2 text-sm text-stone-500">No stock changes yet.</p>
               )}
               {history.map((h) => (
                 <div
                   key={h.id}
-                  className="flex items-start gap-2 px-3 py-1.5 text-xs"
+                  className="flex items-center gap-3 border-b border-stone-100 py-2 text-xs last:border-0"
                 >
                   <span
                     className={
-                      "w-9 shrink-0 text-sm font-semibold tabular-nums " +
-                      (h.change > 0 ? "text-emerald-700" : "text-rose-700")
+                      "w-12 shrink-0 rounded-md py-0.5 text-center text-sm font-bold tabular-nums " +
+                      (h.change > 0
+                        ? "bg-emerald-50 text-emerald-700"
+                        : "bg-rose-50 text-rose-700")
                     }
                   >
                     {h.change > 0 ? "+" : ""}
                     {h.change}
                   </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="text-sm">{reasonLabel[h.reason]}</span>
-                    <span className="block truncate font-mono text-stone-500">
-                      {h.sku}
-                    </span>
-                    {h.note && (
-                      <span className="block text-stone-500">{h.note}</span>
-                    )}
+                  <span className="w-32 shrink-0 text-sm font-bold">{reasonLabel[h.reason]}</span>
+                  <span className="min-w-0 flex-1 truncate border-l border-stone-200 pl-3 text-stone-600">
+                    {variantLabel(h)}
+                    {h.note ? ` · ${h.note}` : ""}
                   </span>
                   <span className="shrink-0 text-right text-stone-500">
                     {formatDateTime(h.createdAt, timezone)}
-                    {h.userName && <span className="block">{h.userName}</span>}
                   </span>
                 </div>
               ))}
@@ -604,6 +387,137 @@ export default async function ProductPage({
           </Block>
         </div>
       </div>
+
+      {/* Less-used tools, kept out of the way until opened. */}
+      <details className="card group" data-prices>
+        <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-bold">
+          Prices, SKUs and low-stock alerts for each size and color
+          <span className="text-xs font-semibold text-brand group-open:hidden">Open</span>
+          <span className="hidden text-xs font-semibold text-brand group-open:inline">Close</span>
+        </summary>
+        <ActionForm
+          action={updateVariants.bind(null, product.id)}
+          submit="Save changes"
+          submitClassName="btn btn-sm"
+          footerClassName="flex flex-row-reverse items-center justify-between gap-3 px-4 py-3"
+        >
+          <div className="overflow-x-auto px-4">
+            <table className="w-full min-w-[36rem] border-collapse text-sm">
+              <thead>
+                <tr>
+                  <th className="th rounded-l-lg">Color</th>
+                  <th className="th">Size</th>
+                  <th className="th">SKU</th>
+                  <th className="th text-right">Price</th>
+                  <th className="th text-right">Cost</th>
+                  <th className="th text-right whitespace-nowrap">Alert at</th>
+                  <th className="th rounded-r-lg text-right">Stock</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-stone-100">
+                {items.map((v) => (
+                  <tr key={v.id}>
+                    <td className="w-28 p-0.5">
+                      <input
+                        name={`color:${v.id}`}
+                        defaultValue={v.color ?? ""}
+                        aria-label="Color"
+                        placeholder="—"
+                        className="cell font-medium"
+                      />
+                    </td>
+                    <td className="w-16 p-0.5">
+                      <input
+                        name={`size:${v.id}`}
+                        defaultValue={v.size ?? ""}
+                        aria-label="Size"
+                        placeholder="—"
+                        className="cell"
+                      />
+                    </td>
+                    <td className="min-w-36 p-0.5">
+                      <input
+                        name={`sku:${v.id}`}
+                        defaultValue={v.sku}
+                        aria-label="SKU"
+                        required
+                        className="cell font-mono text-xs"
+                      />
+                    </td>
+                    <td className="w-20 p-0.5">
+                      <input
+                        name={`price:${v.id}`}
+                        defaultValue={Number(v.price)}
+                        aria-label="Price"
+                        inputMode="decimal"
+                        className="cell text-right tabular-nums"
+                      />
+                    </td>
+                    <td className="w-20 p-0.5">
+                      <input
+                        name={`cost:${v.id}`}
+                        defaultValue={Number(v.cost)}
+                        aria-label="Cost"
+                        inputMode="decimal"
+                        className="cell text-right tabular-nums"
+                      />
+                    </td>
+                    <td className="w-16 p-0.5">
+                      <input
+                        name={`low:${v.id}`}
+                        defaultValue={v.lowStockAt}
+                        aria-label="Low stock alert"
+                        inputMode="numeric"
+                        className="cell text-right tabular-nums"
+                      />
+                    </td>
+                    <td className="w-16 px-3 py-1.5 text-right tabular-nums">{v.stock}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="bg-brand-100 font-bold">
+                  <td className="rounded-l-lg px-3 py-2" colSpan={6}>
+                    Total · {items.length} {items.length === 1 ? "item" : "items"}
+                  </td>
+                  <td className="rounded-r-lg px-3 py-2 text-right tabular-nums">{available}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </ActionForm>
+      </details>
+
+      <details className="card group" data-add-variant>
+        <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-bold">
+          Add a size or color
+          <span className="text-xs font-semibold text-brand group-open:hidden">Open</span>
+          <span className="hidden text-xs font-semibold text-brand group-open:inline">Close</span>
+        </summary>
+        <div className="px-4 pb-4">
+          <ActionForm
+            action={addVariants.bind(null, product.id)}
+            submit="Add"
+            submitClassName="btn btn-sm"
+            className="grid grid-cols-3 items-end gap-3 sm:grid-cols-[1fr_1fr_6rem_auto]"
+            footerClassName="max-sm:col-span-3 flex flex-wrap items-center gap-3 sm:flex-row-reverse sm:pb-0.5"
+          >
+            <Field label="New size">
+              <input name="size" placeholder="XL" className="input" />
+            </Field>
+            <Field label="New color">
+              <input name="color" placeholder="Navy" className="input" />
+            </Field>
+            <Field label="Stock each">
+              <input name="stock" inputMode="numeric" defaultValue="0" className="input" />
+            </Field>
+          </ActionForm>
+          <p className="mt-2 text-xs text-stone-500">
+            A new size is added to every color, and a new color gets every size.
+            Fill in both to add just that one.
+          </p>
+        </div>
+      </details>
     </div>
   );
 }

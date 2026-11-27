@@ -29,7 +29,7 @@ export default async function AutomationsPage() {
       <div className="grid gap-3 lg:grid-cols-2">
         <section className="space-y-3">
           <div>
-            <h2 className="text-[11px] font-bold tracking-wider text-stone-700 uppercase">Automatic replies</h2>
+            <h2 className="text-sm font-bold text-stone-900">Automatic replies</h2>
             <p className="text-sm text-stone-500">
               When a customer&apos;s message contains the keyword, the reply is
               sent instantly.
@@ -73,7 +73,7 @@ export default async function AutomationsPage() {
 
         <section className="space-y-3">
           <div>
-            <h2 className="text-[11px] font-bold tracking-wider text-stone-700 uppercase">Saved replies</h2>
+            <h2 className="text-sm font-bold text-stone-900">Saved replies</h2>
             <p className="text-sm text-stone-500">
               Messages your team can insert with one click in the inbox.
             </p>

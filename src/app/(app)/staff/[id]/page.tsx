@@ -52,7 +52,7 @@ export default async function EditStaffPage({ params }: PageProps<"/staff/[id]">
           confirm={`Delete ${staff.name}? This can't be undone.`}
           className="card space-y-2 p-3"
         >
-          <h2 className="text-[11px] font-bold tracking-wider text-stone-700 uppercase">Delete</h2>
+          <h2 className="text-sm font-bold text-stone-900">Delete</h2>
           <p className="text-sm text-stone-600">
             Removes their login for good. Orders and stock changes they made
             stay, but will no longer show their name. To only stop them signing

@@ -1,5 +1,6 @@
 import { eq, sql } from "drizzle-orm";
 import { headers } from "next/headers";
+import Link from "next/link";
 import { ActionForm } from "@/components/action-form";
 import { Badge, Field, PageHeader } from "@/components/ui";
 import { db } from "@/db";
@@ -31,10 +32,23 @@ export default async function SettingsPage() {
   return (
     <>
       <PageHeader title="Settings" />
+      <div className="mb-3 flex flex-wrap gap-2" data-settings-links>
+        {owner && (
+          <Link href="/staff" className="btn-secondary">
+            Staff and their logins
+          </Link>
+        )}
+        <Link href="/inbox" className="btn-secondary">
+          Chat inbox
+        </Link>
+        <Link href="/automations" className="btn-secondary">
+          Auto replies
+        </Link>
+      </div>
       <div className="grid gap-3 lg:grid-cols-2">
         {owner && (
           <section className="space-y-3">
-            <h2 className="text-[11px] font-bold tracking-wider text-stone-700 uppercase">
+            <h2 className="text-sm font-bold text-stone-900">
               Business
             </h2>
             <ActionForm
@@ -86,7 +100,7 @@ export default async function SettingsPage() {
         )}
 
         <section className="space-y-3">
-          <h2 className="text-[11px] font-bold tracking-wider text-stone-700 uppercase">
+          <h2 className="text-sm font-bold text-stone-900">
             Your password
           </h2>
           <ActionForm
@@ -117,7 +131,7 @@ export default async function SettingsPage() {
         </section>
 
         <section className="space-y-3">
-          <h2 className="text-[11px] font-bold tracking-wider text-stone-700 uppercase">
+          <h2 className="text-sm font-bold text-stone-900">
             If you forget your password
           </h2>
           <ActionForm
@@ -150,7 +164,7 @@ export default async function SettingsPage() {
 
         {owner && (
           <section className="space-y-3">
-            <h2 className="text-[11px] font-bold tracking-wider text-stone-700 uppercase">
+            <h2 className="text-sm font-bold text-stone-900">
               Safety copy of your data
             </h2>
             <div className="card space-y-2 p-3">
@@ -173,7 +187,7 @@ export default async function SettingsPage() {
 
         {owner && (
           <section className="space-y-3">
-            <h2 className="text-[11px] font-bold tracking-wider text-stone-700 uppercase">
+            <h2 className="text-sm font-bold text-stone-900">
               Chat channels
             </h2>
             <div className="card divide-y divide-stone-100">

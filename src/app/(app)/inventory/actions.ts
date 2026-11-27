@@ -24,18 +24,22 @@ const code = (value: string, length: number) =>
     .replace(/[^A-Z0-9]/g, "")
     .slice(0, length);
 
-function skuFor(name: string, size: string | null, color: string | null) {
+// A short code made from the product's name, e.g. "Linen Shirt" → LINSHI.
+function productCode(name: string) {
   const words = name.split(/\s+/).filter(Boolean);
-  const prefix =
+  const made =
     words.length > 1
       ? words
           .slice(0, 3)
           .map((w) => code(w, 3))
           .join("")
       : code(name, 6);
-  return [prefix || "ITEM", color && code(color, 3), size && code(size, 4)]
-    .filter(Boolean)
-    .join("-");
+  return made || "ITEM";
+}
+
+// The SKU of one size and color: the product's code plus the color and size.
+function skuFor(base: string, size: string | null, color: string | null) {
+  return [base, color && code(color, 3), size && code(size, 4)].filter(Boolean).join("-");
 }
 
 // Makes sure a SKU isn't already used by adding -2, -3… when needed.
@@ -151,7 +155,7 @@ export async function createProduct(
   for (const combo of combos) {
     rows.push({
       ...combo,
-      sku: await uniqueSku(skuFor(name, combo.size, combo.color), taken),
+      sku: await uniqueSku(skuFor(productCode(name), combo.size, combo.color), taken),
     });
   }
 
@@ -160,6 +164,7 @@ export async function createProduct(
       .insert(products)
       .values({
         name,
+        sku: productCode(name),
         category: String(input.category ?? "").trim().slice(0, 80) || null,
         description: String(input.description ?? "").trim().slice(0, 2000) || null,
       })
@@ -235,6 +240,8 @@ export async function discardUpload(url: string, thumbUrl?: string | null): Prom
   return null;
 }
 
+// Saves the "Product information" card: the name and details, the product's
+// code, and the selling price (which applies to every size and color).
 export async function updateProduct(
   productId: string,
   _state: ActionState,
@@ -242,23 +249,64 @@ export async function updateProduct(
 ): Promise<ActionState> {
   await requireUser();
   const name = text(form, "name");
+  const sku = code(text(form, "sku"), 24) || null;
+  const priceTyped = text(form, "price");
+  const price = priceTyped === "" ? null : amount(form, "price");
   if (!name) return { error: "Give the product a name." };
-  await db
-    .update(products)
-    .set({
-      name,
-      category: optional(form, "category"),
-      description: optional(form, "description"),
-    })
-    .where(eq(products.id, productId));
+  if (priceTyped !== "" && price === null) return { error: "Selling price must be a number." };
+
+  try {
+    await db.transaction(async (tx) => {
+      const [before] = await tx
+        .select({ sku: products.sku })
+        .from(products)
+        .where(eq(products.id, productId))
+        .for("update");
+      if (!before) throw new StockError("Product not found.");
+
+      await tx
+        .update(products)
+        .set({
+          name: name.slice(0, 120),
+          sku,
+          category: optional(form, "category"),
+          description: optional(form, "description"),
+        })
+        .where(eq(products.id, productId));
+
+      const items = await tx
+        .select({ id: variants.id, sku: variants.sku })
+        .from(variants)
+        .where(eq(variants.productId, productId));
+      for (const item of items) {
+        const change: { price?: string; sku?: string } = {};
+        if (price !== null) change.price = price;
+        // A new product code carries through to every item built on the old one.
+        if (sku && before.sku && sku !== before.sku) {
+          if (item.sku === before.sku) change.sku = sku;
+          else if (item.sku.startsWith(before.sku + "-")) {
+            change.sku = sku + item.sku.slice(before.sku.length);
+          }
+        }
+        if (Object.keys(change).length) {
+          await tx.update(variants).set(change).where(eq(variants.id, item.id));
+        }
+      }
+    });
+  } catch (err) {
+    if (err instanceof StockError) return { error: err.message };
+    if (isDuplicate(err)) return { error: "Another product already uses that SKU." };
+    throw err;
+  }
   refresh();
-  return { ok: "Saved." };
+  return { ok: "Saved" };
 }
 
-export async function setArchived(productId: string, archived: boolean) {
+export async function setArchived(productId: string, archived: boolean): Promise<ActionState> {
   await requireUser();
   await db.update(products).set({ archived }).where(eq(products.id, productId));
   refresh();
+  return { ok: archived ? "Archived" : "Restored" };
 }
 
 // Adds sizes and/or colors. A new size is added for every existing color,
@@ -276,7 +324,7 @@ export async function addVariants(
   if (!(stock >= 0)) return { error: "Stock must be a whole number, 0 or more." };
 
   const [product] = await db
-    .select({ name: products.name })
+    .select({ name: products.name, sku: products.sku })
     .from(products)
     .where(eq(products.id, productId));
   if (!product) return { error: "Product not found." };
@@ -310,7 +358,10 @@ export async function addVariants(
     rows.push({
       ...combo,
       productId,
-      sku: await uniqueSku(skuFor(product.name, combo.size, combo.color), taken),
+      sku: await uniqueSku(
+        skuFor(product.sku || productCode(product.name), combo.size, combo.color),
+        taken,
+      ),
       price: template?.price ?? "0",
       cost: template?.cost ?? "0",
       lowStockAt: template?.lowStockAt ?? 5,
@@ -325,6 +376,16 @@ export async function addVariants(
         change: stock,
         reason: "opening",
         userId: user.id,
+      });
+    }
+    // Stock that arrives with a new size or color gets a purchase record too,
+    // so its cost can be filled in.
+    if (stock > 0) {
+      await tx.insert(stockPurchases).values({
+        productId,
+        units: stock * created.length,
+        note: "Opening stock",
+        createdBy: user.id,
       });
     }
   });

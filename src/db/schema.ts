@@ -78,6 +78,8 @@ export const loginAttempts = pgTable(
 export const products = pgTable("products", {
   id: id(),
   name: text("name").notNull(),
+  // The product's own code. Each size and color has a longer SKU built on it.
+  sku: text("sku"),
   category: text("category"),
   description: text("description"),
   archived: boolean("archived").notNull().default(false),

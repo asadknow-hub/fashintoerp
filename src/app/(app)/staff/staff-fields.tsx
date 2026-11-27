@@ -73,7 +73,7 @@ export function StaffFields({
               type="checkbox"
               name="active"
               defaultChecked={staff.active}
-              className="size-4 accent-stone-900"
+              className="size-4 accent-brand"
             />
             Can sign in
           </label>

@@ -1,4 +1,4 @@
-import { and, count, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
+import { and, count, desc, eq, exists, ilike, inArray, or, sql } from "drizzle-orm";
 import Link from "next/link";
 import {
   Badge,
@@ -9,9 +9,9 @@ import {
   Pager,
 } from "@/components/ui";
 import { db } from "@/db";
-import { customers, orders } from "@/db/schema";
+import { customers, orderItems, orders, products, variants } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
-import { formatDate, formatMoney } from "@/lib/format";
+import { formatDate, formatMoney, isUuid } from "@/lib/format";
 import { getPrefs } from "@/lib/settings";
 
 type Status = (typeof orders.status.enumValues)[number];
@@ -45,9 +45,25 @@ export default async function OrdersPage({
   const { currency, timezone } = await getPrefs();
   const number = /^#?\d+$/.test(q) ? Number(q.replace("#", "")) : null;
 
+  // Opened from a product page: only the orders that contain that product.
+  const productId =
+    typeof params.product === "string" && isUuid(params.product) ? params.product : null;
+  const [only] = productId
+    ? await db.select({ name: products.name }).from(products).where(eq(products.id, productId))
+    : [];
+
   const page = pageNumber(params.page);
   const where = and(
     filter.statuses ? inArray(orders.status, filter.statuses) : undefined,
+    only
+      ? exists(
+          db
+            .select({ one: sql`1` })
+            .from(orderItems)
+            .innerJoin(variants, eq(variants.id, orderItems.variantId))
+            .where(and(eq(orderItems.orderId, orders.id), eq(variants.productId, productId!))),
+        )
+      : undefined,
     q
       ? or(
           ilike(customers.name, `%${q}%`),
@@ -86,6 +102,7 @@ export default async function OrdersPage({
   const pageHref = (target: number) => {
     const query = new URLSearchParams();
     if (filter.key) query.set("status", filter.key);
+    if (only) query.set("product", productId!);
     if (q) query.set("q", q);
     if (target > 1) query.set("page", String(target));
     const text = query.toString();
@@ -99,16 +116,40 @@ export default async function OrdersPage({
         action={{ href: "/orders/new", label: "New order" }}
       />
 
+      {only && (
+        <p
+          data-product-filter
+          className="card mb-3 flex flex-wrap items-center gap-2 border-brand-100 bg-brand-50 px-3 py-2 text-sm"
+        >
+          Showing only orders that contain <b>{only.name}</b>.
+          <Link href={`/inventory/${productId}`} className="font-semibold text-brand hover:underline">
+            Back to the product
+          </Link>
+          <Link href="/orders" className="ml-auto font-semibold text-brand hover:underline">
+            Show all orders
+          </Link>
+        </p>
+      )}
+
       <div className="mb-2 flex flex-wrap items-center gap-3">
         <div className="flex flex-wrap gap-1">
           {filters.map((f) => (
             <Link
               key={f.key}
-              href={f.key ? `/orders?status=${f.key}` : "/orders"}
+              href={
+                "/orders" +
+                (f.key || only
+                  ? "?" +
+                    new URLSearchParams({
+                      ...(f.key && { status: f.key }),
+                      ...(only && { product: productId! }),
+                    })
+                  : "")
+              }
               className={
                 "rounded-full px-3 py-1.5 text-xs font-medium " +
                 (filter.key === f.key
-                  ? "bg-stone-900 text-white"
+                  ? "bg-brand text-white"
                   : "bg-stone-200/70 text-stone-700 hover:bg-stone-200")
               }
             >
