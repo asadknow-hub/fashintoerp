@@ -407,6 +407,30 @@ export const orderItems = pgTable(
   (t) => [index("order_items_order_idx").on(t.orderId)],
 ).enableRLS();
 
+// The record of who did what and when: every change made in the system
+// writes one line here. Lines are never edited or removed by the app. The
+// person's name is kept on the line itself, so it still reads right after
+// their account is gone.
+export const auditLog = pgTable(
+  "audit_log",
+  {
+    id: id(),
+    at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
+    userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
+    userName: text("user_name").notNull(),
+    // orders, stock, products, staff, settings or account.
+    area: text("area").notNull(),
+    // A short code for the kind of change, e.g. "order.delivered".
+    action: text("action").notNull(),
+    // What it was done to ("Order FO003", "Linen Shirt") and what was done.
+    subject: text("subject").notNull(),
+    summary: text("summary").notNull(),
+    orderId: uuid("order_id"),
+    productId: uuid("product_id"),
+  },
+  (t) => [index("audit_log_at_idx").on(t.at), index("audit_log_order_idx").on(t.orderId)],
+).enableRLS();
+
 /* ---------- Chats (inbox) ---------- */
 
 export const chatChannel = pgEnum("chat_channel", [

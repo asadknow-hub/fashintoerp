@@ -15,10 +15,12 @@ import {
   users,
   variants,
 } from "@/db/schema";
+import { audit, orderSubject } from "@/lib/audit";
 import { requireUser } from "@/lib/auth";
 import {
   amount,
   cleanPhone,
+  formatMoney,
   isUuid,
   optional,
   orderName,
@@ -342,6 +344,16 @@ export async function createOrder(
     throw err;
   }
 
+  const pieces = lines.reduce((sum, line) => sum + line.quantity, 0);
+  await audit(user, {
+    area: "orders",
+    action: "order.created",
+    subject: `Order ${shipperRef}`,
+    summary:
+      `Created the order for ${name}: ${pieces} ${pieces === 1 ? "piece" : "pieces"}, COD ${formatMoney(codAmount)}` +
+      (exchangeOf ? " (an exchange)" : ""),
+    orderId,
+  });
   // The screen clears its saved draft, then opens the new order.
   return { go: `/orders/${orderId}` };
 }
@@ -375,12 +387,17 @@ export async function saveOrderNote(
   _state: ActionState,
   form: FormData,
 ): Promise<ActionState> {
-  await requireUser();
+  const user = await requireUser();
   if (!isUuid(orderId)) return { error: "Order not found." };
-  await db
-    .update(orders)
-    .set({ notes: optional(form, "notes") })
-    .where(eq(orders.id, orderId));
+  const note = optional(form, "notes");
+  await db.update(orders).set({ notes: note }).where(eq(orders.id, orderId));
+  await audit(user, {
+    area: "orders",
+    action: "order.note",
+    subject: await orderSubject(orderId),
+    summary: note ? `Changed the note to: ${note.slice(0, 200)}` : "Removed the note",
+    orderId,
+  });
   refresh();
   return { ok: "Note saved." };
 }
@@ -425,6 +442,11 @@ export async function editOrder(
     }
   }
 
+  // What was changed, for the activity log: "COD AED 69.00 → AED 75.00".
+  const changes: string[] = [];
+  const changed = (label: string, before: string | null, after: string | null) => {
+    if ((before ?? "") !== (after ?? "")) changes.push(`${label} ${before || "empty"} → ${after || "empty"}`);
+  };
   try {
     await db.transaction(async (tx) => {
       const [order] = await tx
@@ -432,12 +454,29 @@ export async function editOrder(
           ref: orders.trackingNumber,
           customerId: orders.customerId,
           exchangeOfId: orders.exchangeOfId,
+          createdAt: orders.createdAt,
+          phone2: orders.phone2,
+          country: orders.country,
+          city: orders.city,
+          area: orders.area,
+          street: orders.street,
+          codAmount: orders.codAmount,
+          shippingFee: orders.shippingFee,
+          instruction: orders.instruction,
         })
         .from(orders)
         .where(eq(orders.id, orderId))
         .for("update");
       if (!order) throw new StockError("Order not found.");
       if (ref !== cleanRef(order.ref ?? "")) await refuseUsedRef(tx, ref, orderId);
+      changed("FO number", order.ref, ref);
+      const dayWas = new Intl.DateTimeFormat("en-CA", {
+        timeZone: timezone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(order.createdAt);
+      if (picked.date) changed("date", dayWas, picked.date);
 
       let details = {};
       if (full) {
@@ -449,6 +488,20 @@ export async function editOrder(
           .where(and(eq(customers.phone, phone!), ne(customers.id, order.customerId)))
           .limit(1);
         const customerId = other?.id ?? order.customerId;
+        const [person] = await tx
+          .select({ name: customers.name, phone: customers.phone })
+          .from(customers)
+          .where(eq(customers.id, order.customerId));
+        changed("receiver", person?.name ?? null, name);
+        changed("mobile 1", person?.phone ?? null, phone);
+        changed("mobile 2", order.phone2, phone2);
+        changed("country", order.country, country);
+        changed("city", order.city, city);
+        changed("area", order.area, area);
+        changed("street", order.street, street);
+        changed("COD", formatMoney(order.codAmount), formatMoney(codAmount));
+        changed("delivery fee", formatMoney(order.shippingFee), formatMoney(shippingFee));
+        changed("instruction", order.instruction, optional(form, "instruction"));
         await tx
           .update(customers)
           .set({ name, phone, phone2, country, city, area, address: street })
@@ -494,6 +547,15 @@ export async function editOrder(
     if (isDuplicate(err)) return { error: `${ref} is already used on another order.` };
     throw err;
   }
+  if (changes.length > 0) {
+    await audit(user, {
+      area: "orders",
+      action: "order.edited",
+      subject: `Order ${ref}`,
+      summary: `Edited: ${changes.join("; ")}`,
+      orderId,
+    });
+  }
   refresh();
   return { ok: "Saved." };
 }
@@ -512,14 +574,28 @@ export async function deleteOrder(
   if (!isUuid(orderId)) return { error: "Order not found." };
   const restock = form.get("restock") === "on";
 
+  let gone = { subject: "An order", summary: "Deleted the order" };
   try {
     await db.transaction(async (tx) => {
       const [order] = await tx
-        .select({ number: orders.number, ref: orders.trackingNumber })
+        .select({
+          number: orders.number,
+          ref: orders.trackingNumber,
+          status: orders.status,
+          codAmount: orders.codAmount,
+          customer: customers.name,
+        })
         .from(orders)
+        .innerJoin(customers, eq(customers.id, orders.customerId))
         .where(eq(orders.id, orderId))
-        .for("update");
+        .for("update", { of: orders });
       if (!order) throw new StockError("Order not found.");
+      gone = {
+        subject: `Order ${orderName(order.ref, order.number)}`,
+        summary:
+          `Deleted the order (${order.customer}, ${order.status}, COD ${formatMoney(order.codAmount)})` +
+          (restock ? "; its pieces that were still out went back into stock" : "; stock was not changed"),
+      };
       if (restock) {
         const items = await tx
           .select()
@@ -546,6 +622,7 @@ export async function deleteOrder(
     if (err instanceof StockError) return { error: err.message };
     throw err;
   }
+  await audit(user, { area: "orders", action: "order.deleted", ...gone, orderId });
   return { go: "/orders" };
 }
 
@@ -642,7 +719,7 @@ export async function setOrderProgress(
   _state: ActionState,
   form: FormData,
 ): Promise<ActionState> {
-  await requireUser();
+  const user = await requireUser();
   if (!isUuid(orderId)) return { error: "Order not found." };
   // A later step means the earlier ones happened too.
   const delivered = form.get("delivered") === "on";
@@ -657,6 +734,7 @@ export async function setOrderProgress(
   // The state the pop-up was opened on.
   const was = text(form, "was");
 
+  let moved: { from: Status; to: Status; company: string | null } | null = null;
   try {
     await db.transaction(async (tx) => {
       const [order] = await tx
@@ -694,14 +772,17 @@ export async function setOrderProgress(
           );
         }
       }
+      let companyName: string | null = null;
       if (portal) {
         const [company] = await tx
-          .select({ id: deliveryCompanies.id })
+          .select({ id: deliveryCompanies.id, name: deliveryCompanies.name })
           .from(deliveryCompanies)
           .where(eq(deliveryCompanies.id, companyId));
         if (!company) throw new StockError("That delivery company no longer exists.");
+        companyName = company.name;
       }
       const status = delivered ? "delivered" : dispatched ? "shipped" : portal ? "confirmed" : "new";
+      moved = { from: order.status, to: status, company: companyName };
       await tx
         .update(orders)
         .set({
@@ -715,6 +796,34 @@ export async function setOrderProgress(
   } catch (err) {
     if (err instanceof StockError) return { error: err.message };
     throw err;
+  }
+  // One line per step that was newly reached, so each has its own "by whom".
+  const change = moved as { from: Status; to: Status; company: string | null } | null;
+  if (change) {
+    const subject = await orderSubject(orderId);
+    const before = steps[change.from] ?? 0;
+    const after = steps[change.to] ?? 0;
+    const names = ["New", "In portal", "Dispatched", "Delivered"];
+    const line = (action: string, summary: string) =>
+      audit(user, { area: "orders", action, subject, summary, orderId });
+    if (after > before) {
+      if (before < 1) {
+        await line("order.portal", `Created in the delivery portal${change.company ? ` (${change.company})` : ""}`);
+      }
+      if (before < 2 && after >= 2) await line("order.dispatched", "Marked as dispatched");
+      if (after >= 3) {
+        await line("order.delivered", `Marked as delivered, delivery charge ${formatMoney(charge)}`);
+      }
+    } else if (after < before) {
+      await line("order.steps_undone", `Moved back from ${names[before]} to ${names[after]}`);
+    } else {
+      await line(
+        "order.delivery_updated",
+        "Updated the delivery details" +
+          (change.company ? `: ${change.company}` : "") +
+          (charge !== null ? `, delivery charge ${formatMoney(charge)}` : ""),
+      );
+    }
   }
   refresh();
   return { ok: "Saved." };
@@ -742,6 +851,7 @@ export async function cancelOrder(
     return { error: "Enter what the delivery company charges for the opened parcel." };
   }
 
+  let wasOut = false;
   try {
     await db.transaction(async (tx) => {
       const [order] = await tx
@@ -789,11 +899,22 @@ export async function cancelOrder(
         .update(orders)
         .set({ status: "cancelled", cancelledAt: sql`now()`, cancelFee: fee })
         .where(eq(orders.id, orderId));
+      wasOut = isOut(order);
     });
   } catch (err) {
     if (err instanceof StockError) return { error: err.message };
     throw err;
   }
+  await audit(user, {
+    area: "orders",
+    action: "order.cancelled",
+    subject: await orderSubject(orderId),
+    summary:
+      "Cancelled the order" +
+      (opened ? ` after the customer opened the parcel, ${formatMoney(fee)} charged` : "") +
+      (wasOut ? "; its pieces are on their way back" : "; its pieces went back into stock"),
+    orderId,
+  });
   refresh();
   return { ok: "Order cancelled." };
 }
@@ -809,7 +930,7 @@ export async function createReturn(
   _state: ActionState,
   form: FormData,
 ): Promise<ActionState> {
-  await requireUser();
+  const user = await requireUser();
   if (!isUuid(orderId)) return { error: "Order not found." };
   const fee = amount(form, "returnFee");
   if (text(form, "returnFee") === "" || fee === null) {
@@ -820,6 +941,7 @@ export async function createReturn(
     return { error: "Enter what the delivery company charges for collecting the return." };
   }
 
+  let refund = 0;
   try {
     await db.transaction(async (tx) => {
       const [order] = await tx
@@ -853,6 +975,7 @@ export async function createReturn(
       if (Number(fee) > paid + 0.005) {
         throw new StockError("The customer can't cover more than they paid for the order.");
       }
+      refund = Math.max(paid - Number(fee), 0);
       await tx
         .update(orders)
         .set({
@@ -868,6 +991,13 @@ export async function createReturn(
     if (err instanceof StockError) return { error: err.message };
     throw err;
   }
+  await audit(user, {
+    area: "orders",
+    action: "order.returned",
+    subject: await orderSubject(orderId),
+    summary: `Created a return: the customer covers ${formatMoney(fee)} of the delivery, return charge ${formatMoney(charge)}, refund ${formatMoney(refund)}`,
+    orderId,
+  });
   refresh();
   return { ok: "Return created." };
 }
@@ -875,7 +1005,7 @@ export async function createReturn(
 // Ticked on a returned order once the customer's money has been sent back
 // by bank transfer (and unticked if that was a mistake).
 export async function markRefund(orderId: string, sent: boolean): Promise<ActionState> {
-  await requireUser();
+  const user = await requireUser();
   if (!isUuid(orderId)) return { error: "Order not found." };
   const [order] = await db
     .update(orders)
@@ -883,6 +1013,13 @@ export async function markRefund(orderId: string, sent: boolean): Promise<Action
     .where(and(eq(orders.id, orderId), eq(orders.status, "returned")))
     .returning({ id: orders.id });
   if (!order) return { error: "Only a returned order has a refund." };
+  await audit(user, {
+    area: "orders",
+    action: "order.refund",
+    subject: await orderSubject(orderId),
+    summary: sent ? "Marked the refund as sent to the customer" : "Marked the refund as not sent yet",
+    orderId,
+  });
   refresh();
   return { ok: "Saved." };
 }
@@ -900,6 +1037,7 @@ export async function settleItem(
   if (!["stock", "discarded", "none", "waiting"].includes(state)) {
     return { error: "Choose what happened to the item." };
   }
+  let settled: { orderId: string; subject: string; piece: string } | null = null;
 
   try {
     await db.transaction(async (tx) => {
@@ -960,11 +1098,179 @@ export async function settleItem(
           backAt: state === "waiting" ? null : sql`now()`,
         })
         .where(eq(orderItems.id, itemId));
+      const [piece] = await tx
+        .select({ size: variants.size, color: variants.color })
+        .from(variants)
+        .where(eq(variants.id, item.variantId));
+      settled = {
+        orderId: order.id,
+        subject: `Order ${orderName(order.ref, order.number)}`,
+        piece: `${item.quantity} × ${[piece?.size, piece?.color].filter(Boolean).join(" ")}`,
+      };
     });
   } catch (err) {
     if (err instanceof StockError) return { error: err.message };
     throw err;
   }
+  const done = settled as { orderId: string; subject: string; piece: string } | null;
+  if (done) {
+    await audit(user, {
+      area: "orders",
+      action: "order.item_" + state,
+      subject: done.subject,
+      summary:
+        done.piece +
+        (state === "stock"
+          ? " received back into stock"
+          : state === "discarded"
+            ? " received and discarded"
+            : state === "none"
+              ? " marked as not coming back"
+              : " marked as awaited again"),
+      orderId: done.orderId,
+    });
+  }
   refresh();
   return { ok: "Saved." };
+}
+
+// "Edit items" on the order page, for a System Admin: change what is in an
+// order. Lines can be added, removed, and have their quantity and price
+// changed. Stock follows: pieces added are taken out of stock, pieces removed
+// go back. Not allowed once the order is closed, was exchanged, or has pieces
+// that already came back, since its stock and money are settled then.
+export async function editOrderItems(
+  orderId: string,
+  _state: ActionState,
+  form: FormData,
+): Promise<ActionState> {
+  const user = await requireUser();
+  if (user.role !== "owner") return { error: "Only a System Admin can change an order's items." };
+  if (!isUuid(orderId)) return { error: "Order not found." };
+  const lines = readLines(form);
+  if (!lines) return { error: "Something is wrong with the items. Please check them." };
+  if (lines.length === 0) return { error: "An order needs at least one item. Delete the order instead." };
+  const codTyped = text(form, "cod");
+  const codAmount = amount(form, "cod");
+  if (codTyped === "" || codAmount === null) return { error: "The COD must be a number." };
+
+  let log: { subject: string; before: string; after: string; cod: string } | null = null;
+  try {
+    await db.transaction(async (tx) => {
+      const [order] = await tx
+        .select({
+          status: orders.status,
+          number: orders.number,
+          ref: orders.trackingNumber,
+          shippingFee: orders.shippingFee,
+          codAmount: orders.codAmount,
+          exchangeOfId: orders.exchangeOfId,
+        })
+        .from(orders)
+        .where(eq(orders.id, orderId))
+        .for("update");
+      if (!order) throw new StockError("Order not found.");
+      if (closed.includes(order.status)) {
+        throw new StockError(`This order is ${order.status}, so its items can't be changed.`);
+      }
+      const swapped = await liveExchange(tx, orderId);
+      if (swapped) {
+        throw new StockError(`This order was exchanged with ${swapped}, so its items can't be changed.`);
+      }
+      const before = await tx
+        .select()
+        .from(orderItems)
+        .where(eq(orderItems.orderId, orderId))
+        .for("update");
+      if (before.some((item) => item.backState !== null)) {
+        throw new StockError("Pieces of this order have already been settled, so its items can't be changed.");
+      }
+
+      // How many of each item the order takes now, against what it took.
+      const had = new Map<string, number>();
+      for (const item of before) had.set(item.variantId, (had.get(item.variantId) ?? 0) + item.quantity);
+      const wants = new Map<string, number>();
+      for (const line of lines) wants.set(line.variantId, (wants.get(line.variantId) ?? 0) + line.quantity);
+      const touched = [...new Set([...had.keys(), ...wants.keys()])];
+      const found = await tx
+        .select({
+          id: variants.id,
+          size: variants.size,
+          color: variants.color,
+          stock: variants.stock,
+          name: products.name,
+        })
+        .from(variants)
+        .innerJoin(products, eq(products.id, variants.productId))
+        .where(inArray(variants.id, touched))
+        .for("update", { of: variants });
+      if (found.length !== touched.length) throw new StockError("One of the items no longer exists.");
+      const name = orderName(order.ref, order.number);
+      for (const item of found) {
+        const more = (wants.get(item.id) ?? 0) - (had.get(item.id) ?? 0);
+        if (more > item.stock) {
+          throw new StockError(
+            `Only ${item.stock} more of ${item.name} · ${variantLabel(item)} in stock, so ${more} more can't be added.`,
+          );
+        }
+        // Counted as part of the sale either way, so "units sold" stays right.
+        await changeStock(tx, {
+          variantId: item.id,
+          change: -more,
+          reason: "sale",
+          note: `Order ${name} edited`,
+          orderId,
+          userId: user.id,
+        });
+      }
+
+      await tx.delete(orderItems).where(eq(orderItems.orderId, orderId));
+      await tx.insert(orderItems).values(lines.map((line) => ({ ...line, orderId })));
+      const subtotal = lines.reduce((sum, line) => sum + lineTotal(line), 0);
+      await tx
+        .update(orders)
+        .set({
+          total: (subtotal + Number(order.shippingFee)).toFixed(2),
+          codAmount,
+          payment: Number(codAmount) > 0 || order.exchangeOfId ? "cod" : "prepaid",
+        })
+        .where(eq(orders.id, orderId));
+
+      // In the order the lines were on the order, not the order the database
+      // happened to return them.
+      const byId = new Map(found.map((item) => [item.id, item]));
+      const said = (list: Map<string, number>) =>
+        [...list]
+          .filter(([, quantity]) => quantity > 0)
+          .map(([id, quantity]) => {
+            const item = byId.get(id);
+            return `${quantity} ${[item?.size, item?.color].filter(Boolean).join(" ")}`;
+          })
+          .join(", ");
+      log = {
+        subject: `Order ${name}`,
+        before: said(had),
+        after: said(wants),
+        cod:
+          Number(order.codAmount) === Number(codAmount)
+            ? ""
+            : `; COD ${formatMoney(order.codAmount)} → ${formatMoney(codAmount)}`,
+      };
+    });
+  } catch (err) {
+    if (err instanceof StockError) return { error: err.message };
+    throw err;
+  }
+  const entry = log as { subject: string; before: string; after: string; cod: string } | null;
+  if (entry) {
+    await audit(user, {
+      area: "orders",
+      action: "order.items",
+      subject: entry.subject,
+      summary: `Changed the items from "${entry.before}" to "${entry.after}"${entry.cod}`,
+      orderId,
+    });
+  }
+  refresh();
+  return { ok: "Items saved." };
 }

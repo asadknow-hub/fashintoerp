@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import {
+  auditLog,
   autoReplies,
   conversations,
   customers,
@@ -20,6 +21,7 @@ import {
   users,
   variants,
 } from "@/db/schema";
+import { audit } from "@/lib/audit";
 import { getUser } from "@/lib/auth";
 
 // Lets an owner download a safety copy of everything in the database as one
@@ -48,6 +50,7 @@ export async function GET() {
     purchaseRows,
     purchaseLineRows,
     companyRows,
+    auditRows,
   ] = await Promise.all([
     db.select().from(settings),
     db
@@ -76,8 +79,15 @@ export async function GET() {
     db.select().from(stockPurchases),
     db.select().from(stockPurchaseLines),
     db.select().from(deliveryCompanies),
+    db.select().from(auditLog),
   ]);
 
+  await audit(user, {
+    area: "settings",
+    action: "settings.backup",
+    subject: "Safety copy",
+    summary: "Downloaded a safety copy of all the data",
+  });
   const takenAt = new Date();
   await db.update(settings).set({ lastBackupAt: takenAt }).where(eq(settings.id, 1));
 
@@ -96,6 +106,7 @@ export async function GET() {
       stock_purchases: purchaseRows,
       stock_purchase_lines: purchaseLineRows,
       delivery_companies: companyRows,
+      audit_log: auditRows,
       stock_counts: countRows,
       stock_count_lines: countLineRows,
       customers: customerRows,

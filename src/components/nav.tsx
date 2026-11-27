@@ -3,6 +3,7 @@
 import {
   ChartColumn,
   ChevronDown,
+  History,
   LayoutGrid,
   type LucideIcon,
   Package,
@@ -58,6 +59,7 @@ const menu: Entry[] = [
   { label: "Customers", href: "/customers", icon: Users },
   { label: "Reports", href: "/reports", icon: ChartColumn },
   { label: "Staff", href: "/staff", icon: UserCog },
+  { label: "Activity Log", href: "/activity", icon: History },
   { label: "Settings", href: "/settings", icon: Settings },
 ];
 
@@ -101,6 +103,7 @@ function place(pathname: string, params: URLSearchParams): Place {
   }
   if (pathname.startsWith("/customers")) return { section: "Customers" };
   if (pathname.startsWith("/reports")) return { section: "Reports" };
+  if (pathname.startsWith("/activity")) return { section: "Activity Log" };
   if (pathname === "/staff") return { section: "Staff" };
   if (pathname === "/staff/new") return { section: "Staff", page: "Add Staff" };
   if (pathname.startsWith("/staff/")) return { section: "Staff", page: "Staff Member" };
@@ -136,7 +139,8 @@ export function Nav({ staff }: { staff: boolean }) {
   return (
     <nav className="flex min-h-0 flex-col gap-0.5 overflow-y-auto">
       {menu
-        .filter((entry) => staff || entry.label !== "Staff")
+        // Staff accounts and the activity log are for a System Admin only.
+        .filter((entry) => staff || (entry.label !== "Staff" && entry.label !== "Activity Log"))
         .map((entry) => {
         const inside = here.section === entry.label;
         if (!entry.items) {

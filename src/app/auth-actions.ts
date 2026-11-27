@@ -1,5 +1,6 @@
 "use server";
 
+import { audit } from "@/lib/audit";
 import { and, count, eq, gt, sql } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import type { ActionState } from "@/components/action-form";
@@ -48,6 +49,12 @@ export async function login(
   }
 
   await createSession(user.id);
+  await audit(user, {
+    area: "account",
+    action: "account.signed_in",
+    subject: user.name,
+    summary: "Signed in",
+  });
   redirect("/");
 }
 

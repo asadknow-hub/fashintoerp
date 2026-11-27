@@ -134,6 +134,13 @@
       "when": 1795798495704,
       "tag": "0018_refund_base",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1795799234461,
+      "tag": "0019_audit_log",
+      "breakpoints": true
     }
   ]
 }

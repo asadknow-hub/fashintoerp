@@ -13,6 +13,7 @@ import {
   stockPurchases,
   variants,
 } from "@/db/schema";
+import { audit, productSubject } from "@/lib/audit";
 import { requireUser } from "@/lib/auth";
 import { amount, isUuid, optional, text, wholeNumber } from "@/lib/format";
 import { isOurUrl, removeFile } from "@/lib/media";
@@ -227,6 +228,13 @@ export async function createProduct(
     return product.id;
   });
 
+  await audit(user, {
+    area: "products",
+    action: "product.created",
+    subject: name,
+    summary: `Added the product with ${rows.length} sizes and colors and ${pieces} pieces of opening stock`,
+    productId,
+  });
   return { id: productId };
 }
 
@@ -257,7 +265,7 @@ export async function updateProduct(
   _state: ActionState,
   form: FormData,
 ): Promise<ActionState> {
-  await requireUser();
+  const user = await requireUser();
   const name = text(form, "name");
   const sku = code(text(form, "sku"), 24) || null;
   const priceTyped = text(form, "price");
@@ -339,13 +347,32 @@ export async function updateProduct(
     if (isDuplicate(err)) return { error: "Another product already uses that SKU." };
     throw err;
   }
+  await audit(user, {
+    area: "products",
+    action: "product.edited",
+    subject: name,
+    summary:
+      "Edited the product's details" +
+      (price !== null ? `, selling price ${price}` : "") +
+      (Object.keys(tiers).length
+        ? `, prices for 2/3/4 pieces ${[tiers.price2, tiers.price3, tiers.price4].map((value) => value ?? "none").join(" / ")}`
+        : ""),
+    productId,
+  });
   refresh();
   return { ok: "Saved" };
 }
 
 export async function setArchived(productId: string, archived: boolean): Promise<ActionState> {
-  await requireUser();
+  const user = await requireUser();
   await db.update(products).set({ archived }).where(eq(products.id, productId));
+  await audit(user, {
+    area: "products",
+    action: archived ? "product.archived" : "product.restored",
+    subject: await productSubject(productId),
+    summary: archived ? "Archived the product" : "Restored the product",
+    productId,
+  });
   refresh();
   return { ok: archived ? "Archived" : "Restored" };
 }
@@ -430,6 +457,13 @@ export async function addVariants(
       });
     }
   });
+  await audit(user, {
+    area: "products",
+    action: "product.variants_added",
+    subject: product.name,
+    summary: `Added ${[size && `size ${size}`, color && `color ${color}`].filter(Boolean).join(" and ")}${stock > 0 ? ` with ${stock} pieces each` : ""}`,
+    productId,
+  });
   refresh();
   return { ok: "Added." };
 }
@@ -440,7 +474,7 @@ export async function updateVariants(
   _state: ActionState,
   form: FormData,
 ): Promise<ActionState> {
-  await requireUser();
+  const user = await requireUser();
   const rows = await db
     .select({ id: variants.id })
     .from(variants)
@@ -487,6 +521,13 @@ export async function updateVariants(
     if (isDuplicate(err)) return { error: "Another product already uses one of those SKUs." };
     throw err;
   }
+  await audit(user, {
+    area: "products",
+    action: "product.prices",
+    subject: await productSubject(productId),
+    summary: "Changed the prices, costs, codes or low-stock levels of its sizes and colors",
+    productId,
+  });
   refresh();
   return { ok: "Saved." };
 }
@@ -537,6 +578,15 @@ export async function adjustStockGrid(
     if (err instanceof StockError) return { error: err.message };
     throw err;
   }
+  await audit(user, {
+    area: "stock",
+    action: "stock." + kindName,
+    subject: await productSubject(productId),
+    summary:
+      (kindName === "damaged" ? "Took pieces off stock as damaged or lost" : "Added returned pieces to stock") +
+      (note ? ` (${note})` : ""),
+    productId,
+  });
   refresh();
   return { ok: "Stock updated." };
 }
@@ -675,6 +725,16 @@ export async function saveBatch(
     if (err instanceof StockError) return { error: err.message };
     throw err;
   }
+  await audit(user, {
+    area: "stock",
+    action: batchId ? "stock.batch_changed" : "stock.batch_added",
+    subject: await productSubject(productId),
+    summary:
+      (batchId ? "Changed a purchase batch" : "Added a purchase batch (stock received)") +
+      (note ? `: ${note}` : "") +
+      (totalCost !== null ? `, total cost ${totalCost}` : ""),
+    productId,
+  });
   refresh();
   return { ok: "Saved." };
 }
@@ -684,14 +744,21 @@ export async function saveBatch(
 export async function deletePurchase(purchaseId: string): Promise<ActionState> {
   const user = await requireUser();
   if (!isUuid(String(purchaseId))) return { error: "That record no longer exists." };
+  let removed: { productId: string; note: string | null; units: number } | null = null;
   try {
     await db.transaction(async (tx) => {
       const [batch] = await tx
-        .select({ id: stockPurchases.id, note: stockPurchases.note })
+        .select({
+          id: stockPurchases.id,
+          note: stockPurchases.note,
+          productId: stockPurchases.productId,
+          units: stockPurchases.units,
+        })
         .from(stockPurchases)
         .where(eq(stockPurchases.id, purchaseId))
         .for("update");
       if (!batch) return;
+      removed = { productId: batch.productId, note: batch.note, units: batch.units };
       const lines = await tx
         .select({
           variantId: stockPurchaseLines.variantId,
@@ -720,6 +787,16 @@ export async function deletePurchase(purchaseId: string): Promise<ActionState> {
   } catch (err) {
     if (err instanceof StockError) return { error: err.message };
     throw err;
+  }
+  const batchGone = removed as { productId: string; note: string | null; units: number } | null;
+  if (batchGone) {
+    await audit(user, {
+      area: "stock",
+      action: "stock.batch_deleted",
+      subject: await productSubject(batchGone.productId),
+      summary: `Deleted a purchase batch of ${batchGone.units} pieces${batchGone.note ? ` (${batchGone.note})` : ""}`,
+      productId: batchGone.productId,
+    });
   }
   refresh();
   return { ok: "Batch deleted." };
@@ -807,6 +884,13 @@ export async function saveCount(
   });
   if ("error" in result) return { error: result.error };
 
+  await audit(user, {
+    area: "stock",
+    action: countId ? "stock.count_changed" : "stock.count_saved",
+    subject: await productSubject(productId),
+    summary: (countId ? "Changed a stock count" : "Saved a stock count") + (note ? ` (${note})` : ""),
+    productId,
+  });
   refresh();
   const summary = tally(
     result.lines.map((line) => ({ counted: line.counted, system: line.systemStock })),
@@ -817,9 +901,21 @@ export async function saveCount(
 }
 
 export async function deleteCount(countId: string): Promise<ActionState> {
-  await requireUser();
+  const user = await requireUser();
   if (!isUuid(String(countId))) return { error: "That count no longer exists." };
-  await db.delete(stockCounts).where(eq(stockCounts.id, countId));
+  const [gone] = await db
+    .delete(stockCounts)
+    .where(eq(stockCounts.id, countId))
+    .returning({ productId: stockCounts.productId });
+  if (gone) {
+    await audit(user, {
+      area: "stock",
+      action: "stock.count_deleted",
+      subject: await productSubject(gone.productId),
+      summary: "Deleted a stock count",
+      productId: gone.productId,
+    });
+  }
   refresh();
   return { ok: "Count deleted. Stock was not changed." };
 }
@@ -865,6 +961,19 @@ export async function applyCount(countId: string): Promise<ActionState> {
       await tx.update(stockCounts).set({ appliedAt: new Date() }).where(eq(stockCounts.id, countId));
       return total;
     });
+    const [counted] = await db
+      .select({ productId: stockCounts.productId })
+      .from(stockCounts)
+      .where(eq(stockCounts.id, countId));
+    if (counted) {
+      await audit(user, {
+        area: "stock",
+        action: "stock.count_applied",
+        subject: await productSubject(counted.productId),
+        summary: `Set the stock to match a count (${changed} sizes and colors changed)`,
+        productId: counted.productId,
+      });
+    }
     refresh();
     return {
       ok:
@@ -889,7 +998,7 @@ export async function addMedia(input: {
   tag: string;
   fileName: string | null;
 }): Promise<ActionState> {
-  await requireUser();
+  const user = await requireUser();
   const tag = cleanTag(String(input.tag ?? ""));
   if (!isUuid(String(input.productId))) return { error: "Product not found." };
   if (input.kind !== "image" && input.kind !== "video") return { error: "Unknown file type." };
@@ -912,6 +1021,13 @@ export async function addMedia(input: {
     tag,
     fileName: String(input.fileName ?? "").slice(0, 200) || null,
   });
+  await audit(user, {
+    area: "products",
+    action: "product.media_added",
+    subject: await productSubject(product.id),
+    summary: `Added a ${input.kind === "video" ? "video" : "photo"} (${tag})`,
+    productId: product.id,
+  });
   refresh();
   return { ok: "Added." };
 }
@@ -926,15 +1042,27 @@ export async function setMediaTag(mediaId: string, value: string): Promise<Actio
 }
 
 export async function deleteMedia(mediaId: string): Promise<ActionState> {
-  await requireUser();
+  const user = await requireUser();
   if (!isUuid(String(mediaId))) return { error: "Not found." };
   const [removed] = await db
     .delete(productMedia)
     .where(eq(productMedia.id, mediaId))
-    .returning({ url: productMedia.url, thumbUrl: productMedia.thumbUrl });
+    .returning({
+      url: productMedia.url,
+      thumbUrl: productMedia.thumbUrl,
+      productId: productMedia.productId,
+      kind: productMedia.kind,
+    });
   if (removed) {
     await removeFile(removed.url);
     if (removed.thumbUrl) await removeFile(removed.thumbUrl);
+    await audit(user, {
+      area: "products",
+      action: "product.media_deleted",
+      subject: await productSubject(removed.productId),
+      summary: `Deleted a ${removed.kind === "video" ? "video" : "photo"}`,
+      productId: removed.productId,
+    });
   }
   refresh();
   return { ok: "Deleted." };

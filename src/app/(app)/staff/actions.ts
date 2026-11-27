@@ -1,5 +1,6 @@
 "use server";
 
+import { audit } from "@/lib/audit";
 import { and, eq, ne } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import type { ActionState } from "@/components/action-form";
@@ -35,7 +36,7 @@ export async function createStaff(
   _state: ActionState,
   form: FormData,
 ): Promise<ActionState> {
-  await requireOwner();
+  const me = await requireOwner();
   const details = readDetails(form);
   if ("error" in details) return details;
   if (details.password.length < 8) {
@@ -50,6 +51,12 @@ export async function createStaff(
     email: details.email,
     role: details.role,
     passwordHash: await hashPassword(details.password),
+  });
+  await audit(me, {
+    area: "staff",
+    action: "staff.created",
+    subject: details.name,
+    summary: `Added the account ${details.email} as ${details.role === "owner" ? "System Admin" : "Staff"}`,
   });
   redirect("/staff");
 }
@@ -96,6 +103,14 @@ export async function updateStaff(
   if (!self && (details.password || !active)) {
     await db.delete(sessions).where(eq(sessions.userId, staffId));
   }
+  await audit(me, {
+    area: "staff",
+    action: "staff.edited",
+    subject: details.name,
+    summary:
+      `Edited the account ${details.email}: ${details.role === "owner" ? "System Admin" : "Staff"}, access ${active ? "on" : "off"}` +
+      (details.password ? ", new password set" : ""),
+  });
   redirect("/staff");
 }
 
@@ -103,6 +118,17 @@ export async function deleteStaff(staffId: string): Promise<ActionState> {
   const me = await requireOwner();
   if (!isUuid(staffId)) return { error: "Staff member not found." };
   if (staffId === me.id) return { error: "You can't delete your own account." };
-  await db.delete(users).where(eq(users.id, staffId));
+  const [gone] = await db
+    .delete(users)
+    .where(eq(users.id, staffId))
+    .returning({ name: users.name, email: users.email });
+  if (gone) {
+    await audit(me, {
+      area: "staff",
+      action: "staff.deleted",
+      subject: gone.name,
+      summary: `Deleted the account ${gone.email}`,
+    });
+  }
   redirect("/staff");
 }

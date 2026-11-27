@@ -7,6 +7,7 @@ import {
   ListChecks,
   PackageCheck,
   Pencil,
+  Plus,
   Repeat,
   Trash2,
   Undo2,
@@ -15,7 +16,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useActionState, useEffect, useRef, useState, useTransition } from "react";
 import { Modal } from "@/components/modal";
-import { deleteOrder, editOrder, markRefund, settleItem } from "../actions";
+import { pieceCost } from "@/lib/offer";
+import { deleteOrder, editOrder, editOrderItems, markRefund, settleItem } from "../actions";
 import { type ActionView, type Company, type OrderCard, StepsModal } from "../order-actions";
 
 // The card at the top right of an order: what can be done with it now.
@@ -270,7 +272,10 @@ export function EditOrder({
   details,
   piecesOut,
   restockByDefault,
+  label,
 }: {
+  // What the pencil is called where it sits (it opens the same pop-up).
+  label?: string;
   orderId: string;
   name: string;
   // As 2026-11-27.
@@ -317,8 +322,8 @@ export function EditOrder({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        aria-label={admin ? "Edit this order" : "Edit the date or FO number"}
-        title={admin ? "Edit this order" : "Edit the date or FO number"}
+        aria-label={label ?? (admin ? "Edit this order" : "Edit the date or FO number")}
+        title={label ?? (admin ? "Edit this order" : "Edit the date or FO number")}
         className="ml-1.5 inline-flex size-6 cursor-pointer items-center justify-center rounded text-stone-400 hover:bg-brand-100 hover:text-brand"
       >
         <Pencil className="size-3.5" />
@@ -526,5 +531,281 @@ export function RefundSent({
         </span>
       )}
     </div>
+  );
+}
+
+export type EditorProduct = {
+  id: string;
+  name: string;
+  price2: number | null;
+  price3: number | null;
+  price4: number | null;
+  variants: { id: string; size: string | null; color: string | null; price: number; stock: number }[];
+};
+
+type EditorLine = {
+  key: number;
+  productId: string;
+  variantId: string;
+  quantity: string;
+  // Empty means "the product's own price"; a typed price is used as it is.
+  unitPrice: string;
+};
+
+// "Edit items" on an order, for a System Admin: change what is in the order.
+// Stock follows when it is saved: pieces added are taken out of stock, pieces
+// removed go back.
+export function ItemsEditor({
+  orderId,
+  name,
+  currency,
+  cod,
+  products,
+  lines,
+}: {
+  orderId: string;
+  name: string;
+  currency: string;
+  cod: number;
+  products: EditorProduct[];
+  // What the order holds now. A price that is the product's own is passed
+  // as null, so it keeps following the product's multi-piece prices.
+  lines: { variantId: string; quantity: number; unitPrice: number | null }[];
+}) {
+  const [open, setOpen] = useState(false);
+  const [result, save, saving] = useActionState(editOrderItems.bind(null, orderId), null);
+  const [seen, setSeen] = useState(result);
+  const productOfVariant = (variantId: string) =>
+    products.find((product) => product.variants.some((v) => v.id === variantId));
+  const start = (): EditorLine[] =>
+    lines.map((line, index) => ({
+      key: index,
+      productId: productOfVariant(line.variantId)?.id ?? "",
+      variantId: line.variantId,
+      quantity: String(line.quantity),
+      unitPrice: line.unitPrice === null ? "" : line.unitPrice.toFixed(2),
+    }));
+  const [rows, setRows] = useState<EditorLine[]>(start);
+  const [codText, setCodText] = useState(cod.toFixed(2));
+  if (result !== seen) {
+    setSeen(result);
+    if (result?.ok) setOpen(false);
+  }
+
+  const change = (key: number, patch: Partial<EditorLine>) =>
+    setRows((current) => current.map((row) => (row.key === key ? { ...row, ...patch } : row)));
+  // What this order already holds of an item counts as available to it.
+  const held = (variantId: string) =>
+    lines.filter((line) => line.variantId === variantId).reduce((sum, line) => sum + line.quantity, 0);
+
+  // Multi-piece prices, worked out the same way as on Create Order: for each
+  // product, the pieces on lines that use the product's own price are counted
+  // in order; the first costs the full price, the next ones what the table says.
+  const counted = new Map<string, { pieces: number; one: number }>();
+  const priced = rows.map((row) => {
+    const product = products.find((p) => p.id === row.productId);
+    const variant = product?.variants.find((v) => v.id === row.variantId);
+    const quantity = Number(row.quantity);
+    const okQuantity = Number.isInteger(quantity) && quantity >= 1;
+    if (!product || !variant || !okQuantity) {
+      return { row, product, variant, ready: false, unit: 0, discount: 0, total: 0, short: false };
+    }
+    const typed = row.unitPrice.trim();
+    const unit = typed === "" ? variant.price : Number(typed);
+    if (!Number.isFinite(unit) || unit < 0) {
+      return { row, product, variant, ready: false, unit: 0, discount: 0, total: 0, short: false };
+    }
+    let total = quantity * unit;
+    if (typed === "") {
+      const tally = counted.get(product.id) ?? { pieces: 0, one: variant.price };
+      let cents = 0;
+      for (let piece = 0; piece < quantity; piece++) {
+        tally.pieces++;
+        cents += Math.round(Math.min(variant.price, pieceCost(tally.one, product, tally.pieces)) * 100);
+      }
+      counted.set(product.id, tally);
+      total = cents / 100;
+    }
+    const taken = rows
+      .filter((other) => other.variantId === variant.id)
+      .reduce((sum, other) => sum + (Number(other.quantity) || 0), 0);
+    return {
+      row,
+      product,
+      variant,
+      ready: true,
+      unit,
+      discount: Math.max(0, Math.round((quantity * unit - total) * 100) / 100),
+      total,
+      short: taken > variant.stock + held(variant.id),
+    };
+  });
+  const allReady = priced.length > 0 && priced.every((line) => line.ready && !line.short);
+  const itemsTotal = priced.reduce((sum, line) => sum + line.total, 0);
+  const money = (value: number) => `${currency} ${value.toFixed(2)}`;
+  const what = (v: { size: string | null; color: string | null }) =>
+    [v.size, v.color].filter(Boolean).join(" ") || "One kind";
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => {
+          setRows(start());
+          setCodText(cod.toFixed(2));
+          setOpen(true);
+        }}
+        className="btn-secondary btn-sm ml-auto"
+      >
+        <Pencil className="size-3.5" /> Edit items
+      </button>
+      {open && (
+        <Modal
+          wide
+          title={`Edit the items of Order ${name}`}
+          subtitle="Stock follows when you save: pieces added are taken out of stock, pieces removed go back."
+          onClose={() => setOpen(false)}
+        >
+          <form action={save} data-items-editor>
+            <input
+              type="hidden"
+              name="items"
+              value={JSON.stringify(
+                priced
+                  .filter((line) => line.ready)
+                  .map((line) => ({
+                    variantId: line.variant!.id,
+                    quantity: Number(line.row.quantity),
+                    unitPrice: line.unit,
+                    discount: line.discount,
+                  })),
+              )}
+            />
+            <div className="space-y-2 p-4">
+              {priced.map(({ row, product, variant, ready, total, short }) => (
+                <div
+                  key={row.key}
+                  data-edit-line
+                  className="grid items-center gap-2 sm:grid-cols-[minmax(0,1.3fr)_minmax(0,1.2fr)_5rem_6.5rem_6.5rem_2.25rem]"
+                >
+                  <select
+                    aria-label="Product"
+                    value={row.productId}
+                    onChange={(event) =>
+                      change(row.key, { productId: event.target.value, variantId: "", unitPrice: "" })
+                    }
+                    className="input"
+                  >
+                    <option value="">Choose product…</option>
+                    {products.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.name}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    aria-label="Size and color"
+                    value={row.variantId}
+                    disabled={!product}
+                    onChange={(event) => change(row.key, { variantId: event.target.value, unitPrice: "" })}
+                    className="input"
+                  >
+                    <option value="">Size and color…</option>
+                    {product?.variants.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {what(option)} — {option.stock + held(option.id)} available
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    aria-label="Quantity"
+                    inputMode="numeric"
+                    value={row.quantity}
+                    onChange={(event) => change(row.key, { quantity: event.target.value })}
+                    className={"input text-center tabular-nums " + (short ? "border-rose-500" : "")}
+                  />
+                  <input
+                    aria-label="Unit price"
+                    inputMode="decimal"
+                    value={row.unitPrice}
+                    placeholder={variant ? variant.price.toFixed(2) : "0.00"}
+                    onChange={(event) => change(row.key, { unitPrice: event.target.value })}
+                    className="input text-right tabular-nums"
+                  />
+                  <span data-edit-total className="text-right text-sm font-bold tabular-nums">
+                    {ready ? money(total) : "—"}
+                  </span>
+                  <button
+                    type="button"
+                    aria-label="Remove item"
+                    onClick={() => setRows((current) => current.filter((other) => other.key !== row.key))}
+                    className="btn-secondary px-2.5 text-rose-700"
+                  >
+                    <Trash2 className="size-4" />
+                  </button>
+                  {short && variant && (
+                    <p className="text-xs font-semibold text-rose-700 sm:col-span-6">
+                      Only {variant.stock + held(variant.id)} of this are available.
+                    </p>
+                  )}
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={() =>
+                  setRows((current) => [
+                    ...current,
+                    {
+                      key: Math.max(-1, ...current.map((row) => row.key)) + 1,
+                      productId: products.length === 1 ? products[0].id : "",
+                      variantId: "",
+                      quantity: "1",
+                      unitPrice: "",
+                    },
+                  ])
+                }
+                className="btn-secondary btn-sm"
+              >
+                <Plus className="size-3.5" /> Add item
+              </button>
+
+              <div className="mt-2 flex flex-wrap items-end justify-end gap-4 border-t border-stone-200 pt-3 text-sm">
+                <p className="tabular-nums">
+                  Items come to <b data-edit-sum>{money(itemsTotal)}</b>
+                </p>
+                <label className="block">
+                  <span className="label">COD ({currency})</span>
+                  <input
+                    name="cod"
+                    aria-label="COD"
+                    inputMode="decimal"
+                    value={codText}
+                    onChange={(event) => setCodText(event.target.value)}
+                    className="input w-32 text-right font-bold tabular-nums"
+                  />
+                </label>
+              </div>
+              <p className="text-right text-xs text-stone-500">
+                The COD is what the customer pays. It is not changed for you: set it here if the
+                items changed what they owe.
+              </p>
+              {result?.error && (
+                <p role="alert" className="text-sm font-semibold text-rose-700">
+                  {result.error}
+                </p>
+              )}
+            </div>
+            <footer className="flex justify-end gap-2 border-t border-stone-200 bg-stone-50 px-4 py-3">
+              <button type="button" onClick={() => setOpen(false)} className="btn-secondary">
+                Close
+              </button>
+              <button type="submit" disabled={saving || !allReady} className="btn px-5">
+                {saving ? "Saving…" : "Save items"}
+              </button>
+            </footer>
+          </form>
+        </Modal>
+      )}
+    </>
   );
 }

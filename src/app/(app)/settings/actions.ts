@@ -6,6 +6,7 @@ import { refresh } from "next/cache";
 import type { ActionState } from "@/components/action-form";
 import { db } from "@/db";
 import { deliveryCompanies, orders, settings, users } from "@/db/schema";
+import { audit } from "@/lib/audit";
 import { hashPassword, requireOwner, requireUser, verifyPassword } from "@/lib/auth";
 import { amount, isTimeZone, isUuid, text } from "@/lib/format";
 
@@ -13,12 +14,18 @@ export async function updateBusiness(
   _state: ActionState,
   form: FormData,
 ): Promise<ActionState> {
-  await requireOwner();
+  const me = await requireOwner();
   const businessName = text(form, "businessName");
   if (!businessName) return { error: "Enter your business name." };
   const timezone = text(form, "timezone");
   if (!timezone || !isTimeZone(timezone)) return { error: "Pick a time zone." };
   await db.update(settings).set({ businessName, timezone }).where(eq(settings.id, 1));
+  await audit(me, {
+    area: "settings",
+    action: "settings.business",
+    subject: "Business settings",
+    summary: `Saved the business name "${businessName}" and time zone ${timezone}`,
+  });
   refresh();
   return { ok: "Saved." };
 }
@@ -43,6 +50,12 @@ export async function changePassword(
     .update(users)
     .set({ passwordHash: await hashPassword(next) })
     .where(eq(users.id, user.id));
+  await audit(user, {
+    area: "account",
+    action: "account.password",
+    subject: user.name,
+    summary: "Changed their own password",
+  });
   return { ok: "Password changed." };
 }
 
@@ -60,6 +73,12 @@ export async function createRecoveryCode(): Promise<ActionState> {
     .update(users)
     .set({ recoveryHash: await hashPassword(code.replaceAll("-", "")) })
     .where(eq(users.id, user.id));
+  await audit(user, {
+    area: "account",
+    action: "account.recovery_code",
+    subject: user.name,
+    summary: "Created a new recovery code",
+  });
   refresh();
   return {
     ok: `Your recovery code is ${code} — write it down and keep it somewhere safe. It will not be shown again.`,
@@ -79,10 +98,16 @@ function readCompany(form: FormData) {
 }
 
 export async function addCompany(_state: ActionState, form: FormData): Promise<ActionState> {
-  await requireOwner();
+  const me = await requireOwner();
   const values = readCompany(form);
   if ("error" in values) return { error: values.error };
   await db.insert(deliveryCompanies).values(values);
+  await audit(me, {
+    area: "settings",
+    action: "company.added",
+    subject: values.name,
+    summary: `Added the delivery company: delivery charge ${values.rate}, opened-parcel charge ${values.openedFee}`,
+  });
   refresh();
   return { ok: "Added." };
 }
@@ -92,11 +117,17 @@ export async function updateCompany(
   _state: ActionState,
   form: FormData,
 ): Promise<ActionState> {
-  await requireOwner();
+  const me = await requireOwner();
   if (!isUuid(companyId)) return { error: "That company no longer exists." };
   const values = readCompany(form);
   if ("error" in values) return { error: values.error };
   await db.update(deliveryCompanies).set(values).where(eq(deliveryCompanies.id, companyId));
+  await audit(me, {
+    area: "settings",
+    action: "company.edited",
+    subject: values.name,
+    summary: `Changed the delivery company: delivery charge ${values.rate}, opened-parcel charge ${values.openedFee}`,
+  });
   refresh();
   return { ok: "Saved." };
 }
@@ -104,7 +135,7 @@ export async function updateCompany(
 // A company that orders already went out with is kept for those orders and
 // only taken off the list to choose from; an unused one is deleted.
 export async function removeCompany(companyId: string): Promise<ActionState> {
-  await requireOwner();
+  const me = await requireOwner();
   if (!isUuid(companyId)) return { error: "That company no longer exists." };
   const [used] = await db
     .select({ id: orders.id })
@@ -119,6 +150,12 @@ export async function removeCompany(companyId: string): Promise<ActionState> {
   } else {
     await db.delete(deliveryCompanies).where(eq(deliveryCompanies.id, companyId));
   }
+  await audit(me, {
+    area: "settings",
+    action: "company.removed",
+    subject: "Delivery company",
+    summary: used ? "Took a delivery company off the list (orders keep its name)" : "Deleted a delivery company",
+  });
   refresh();
   return null;
 }

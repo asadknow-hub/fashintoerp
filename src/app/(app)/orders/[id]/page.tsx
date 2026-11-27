@@ -19,6 +19,7 @@ import { ActionForm } from "@/components/action-form";
 import { ExchangeInfo, OrderBadge } from "@/components/ui";
 import { db } from "@/db";
 import {
+  auditLog,
   customers,
   deliveryCompanies,
   orderItems,
@@ -33,7 +34,15 @@ import { formatDateTime, formatMoney, isUuid, orderName } from "@/lib/format";
 import { getPrefs } from "@/lib/settings";
 import { saveOrderNote } from "../actions";
 import type { OrderCard } from "../order-actions";
-import { type BackItem, EditOrder, ItemsBack, OutcomeActions, RefundSent } from "./order-parts";
+import {
+  type BackItem,
+  type EditorProduct,
+  EditOrder,
+  ItemsBack,
+  ItemsEditor,
+  OutcomeActions,
+  RefundSent,
+} from "./order-parts";
 
 // Everything about the lines of an order that this page shows.
 function itemsOf(orderId: string) {
@@ -45,6 +54,8 @@ function itemsOf(orderId: string) {
       discount: orderItems.discount,
       backState: orderItems.backState,
       backAt: orderItems.backAt,
+      variantId: orderItems.variantId,
+      listPrice: variants.price,
       name: products.name,
       productId: products.id,
       sku: variants.sku,
@@ -88,7 +99,7 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
   if (!row) notFound();
   const { order, customer, company } = row;
 
-  const [{ currency, timezone }, items, companies, [replaces], replacedBy] =
+  const [{ currency, timezone }, items, companies, [replaces], replacedBy, logs, sellable] =
     await Promise.all([
       getPrefs(),
       itemsOf(id),
@@ -110,7 +121,57 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
         })
         .from(orders)
         .where(eq(orders.exchangeOfId, order.id)),
+      // Who did what on this order.
+      db.select().from(auditLog).where(eq(auditLog.orderId, id)).orderBy(asc(auditLog.at)),
+      // Everything that can be put on an order, for the item editor (an
+      // admin's tool): products on sale, plus what this order already holds.
+      user.role === "owner"
+        ? db
+            .select({
+              id: variants.id,
+              productId: products.id,
+              name: products.name,
+              price2: products.price2,
+              price3: products.price3,
+              price4: products.price4,
+              size: variants.size,
+              color: variants.color,
+              price: variants.price,
+              stock: variants.stock,
+            })
+            .from(variants)
+            .innerJoin(products, eq(products.id, variants.productId))
+            .where(
+              sql`${products.archived} = false or ${variants.id} in (
+                select variant_id from order_items where order_id = ${id}
+              )`,
+            )
+            .orderBy(asc(products.name), asc(variants.createdAt))
+        : Promise.resolve([]),
     ]);
+  const catalog: EditorProduct[] = [];
+  for (const row of sellable) {
+    let product = catalog.find((entry) => entry.id === row.productId);
+    if (!product) {
+      const num = (value: string | null) => (value === null ? null : Number(value));
+      product = {
+        id: row.productId,
+        name: row.name,
+        price2: num(row.price2),
+        price3: num(row.price3),
+        price4: num(row.price4),
+        variants: [],
+      };
+      catalog.push(product);
+    }
+    product.variants.push({
+      id: row.id,
+      size: row.size,
+      color: row.color,
+      price: Number(row.price),
+      stock: row.stock,
+    });
+  }
   // Orders made to replace this one that were not cancelled: only those
   // count as an exchange having happened.
   const liveSwaps = replacedBy.filter((next) => next.status !== "cancelled");
@@ -243,22 +304,92 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
 
   /* ---------- What happened, in order ---------- */
 
-  const events = [
-    { label: "Order taken", at: order.createdAt },
-    ...road.filter((step) => step.at !== null).map((step) => ({ label: step.label, at: step.at! })),
-    ...(order.returnedAt ? [{ label: "Return created", at: order.returnedAt }] : []),
-    ...(order.cancelledAt ? [{ label: "Cancelled", at: order.cancelledAt }] : []),
+  // Who did a step: the latest line of the log for that kind of change.
+  const doer = (action: string) =>
+    [...logs].reverse().find((line) => line.action === action)?.userName ?? null;
+  const stepAction: Record<string, string> = {
+    "Created in delivery system": "order.portal",
+    Dispatched: "order.dispatched",
+    Delivered: "order.delivered",
+  };
+  // Changes that are not steps (notes, edits, refunds, pieces coming back)
+  // are listed as the log has them.
+  const loggedPieces = logs.some((line) => line.action.startsWith("order.item_"));
+  const extras = logs.filter(
+    (line) =>
+      [
+        "order.note",
+        "order.edited",
+        "order.items",
+        "order.refund",
+        "order.steps_undone",
+        "order.delivery_updated",
+      ].includes(line.action) || line.action.startsWith("order.item_"),
+  );
+  const events: { label: string; at: Date; by: string | null }[] = [
+    { label: "Order taken", at: order.createdAt, by: doer("order.created") },
+    ...road
+      .filter((step) => step.at !== null)
+      .map((step) => ({ label: step.label, at: step.at!, by: doer(stepAction[step.label]) })),
+    ...(order.returnedAt
+      ? [{ label: "Return created", at: order.returnedAt, by: doer("order.returned") }]
+      : []),
+    ...(order.cancelledAt
+      ? [{ label: "Cancelled", at: order.cancelledAt, by: doer("order.cancelled") }]
+      : []),
     ...replacedBy.map((next) => ({
       label: `Exchange created: ${orderName(next.ref, next.number)}`,
       at: next.createdAt,
+      by: null,
     })),
-    ...items
-      .filter((item) => item.backAt && item.backState && item.backState !== "none")
-      .map((item) => ({
-        label: `${item.quantity} × ${what(item)} ${item.backState === "stock" ? "received back into stock" : "received and discarded"}`,
-        at: item.backAt!,
-      })),
+    // Pieces that came back before the log existed are worked out from the items.
+    ...(loggedPieces
+      ? []
+      : items
+          .filter((item) => item.backAt && item.backState && item.backState !== "none")
+          .map((item) => ({
+            label: `${item.quantity} × ${what(item)} ${item.backState === "stock" ? "received back into stock" : "received and discarded"}`,
+            at: item.backAt!,
+            by: null,
+          }))),
+    ...extras.map((line) => ({ label: line.summary, at: line.at, by: line.userName })),
   ].sort((a, b) => a.at.getTime() - b.at.getTime());
+
+  const admin = user.role === "owner";
+  // The edit pop-up, opened by the pencil beside the date and (for an
+  // admin) by the one on the customer card.
+  const editing = {
+    orderId: order.id,
+    name,
+    date: dayIn(order.createdAt, timezone),
+    admin,
+    details: {
+      name: customer.name,
+      phone: customer.phone ?? "",
+      phone2: order.phone2 ?? "",
+      country: order.country ?? "",
+      city: order.city ?? "",
+      area: order.area ?? "",
+      street: order.street ?? "",
+      cod: cod.toFixed(2),
+      shippingFee: delivery.toFixed(2),
+      instruction: order.instruction ?? "",
+    },
+    // Pieces a delete could put back: those not already back in stock and
+    // not thrown away.
+    piecesOut: items
+      .filter((item) => item.backState !== "stock" && item.backState !== "discarded")
+      .reduce((sum, item) => sum + item.quantity, 0),
+    // Sensible while the parcel has not reached a customer.
+    restockByDefault: stage === "new" || stage === "portal" || stage === "dispatched",
+  };
+  // Items can be changed until the order's stock is settled: not once it is
+  // closed, was exchanged, or has pieces that came back.
+  const itemsEditable =
+    admin &&
+    stage !== "closed" &&
+    swappedWith === undefined &&
+    items.every((item) => item.backState === null);
 
   const cardHead = "flex items-center gap-2.5 px-4 pt-4 pb-3";
   const detail = "grid grid-cols-[7.5rem_minmax(0,1fr)] gap-x-3 py-1.5 text-sm";
@@ -287,33 +418,7 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
           </h1>
           <p className="flex items-center text-sm text-stone-500">
             {formatDateTime(order.createdAt, timezone)}
-            <EditOrder
-              orderId={order.id}
-              name={name}
-              date={dayIn(order.createdAt, timezone)}
-              admin={user.role === "owner"}
-              details={{
-                name: customer.name,
-                phone: customer.phone ?? "",
-                phone2: order.phone2 ?? "",
-                country: order.country ?? "",
-                city: order.city ?? "",
-                area: order.area ?? "",
-                street: order.street ?? "",
-                cod: cod.toFixed(2),
-                shippingFee: delivery.toFixed(2),
-                instruction: order.instruction ?? "",
-              }}
-              // Pieces a delete could put back: those not already back in
-              // stock and not thrown away.
-              piecesOut={items
-                .filter((item) => item.backState !== "stock" && item.backState !== "discarded")
-                .reduce((sum, item) => sum + item.quantity, 0)}
-              // Sensible while the parcel has not reached a customer.
-              restockByDefault={
-                stage === "new" || stage === "portal" || stage === "dispatched"
-              }
-            />
+            <EditOrder {...editing} />
           </p>
         </div>
       </div>
@@ -424,6 +529,22 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
             <header className={cardHead}>
               <Package className="size-5 text-brand" />
               <h2 className="text-base font-bold">Order Items ({pieces})</h2>
+              {itemsEditable && (
+                <ItemsEditor
+                  orderId={order.id}
+                  name={name}
+                  currency={currency}
+                  cod={cod}
+                  products={catalog}
+                  lines={items.map((item) => ({
+                    variantId: item.variantId,
+                    quantity: item.quantity,
+                    // The product's own price keeps following its multi-piece prices.
+                    unitPrice:
+                      Number(item.unitPrice) === Number(item.listPrice) ? null : Number(item.unitPrice),
+                  }))}
+                />
+              )}
             </header>
             <div className="overflow-x-auto px-4 pb-4">
               <table className="w-full min-w-[34rem] text-sm tabular-nums">
@@ -516,6 +637,7 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
                       <span className="block text-sm leading-tight font-bold">{event.label}</span>
                       <span className="block text-xs text-stone-500">
                         {formatDateTime(event.at, timezone)}
+                        {event.by && <span data-by> · by {event.by}</span>}
                       </span>
                     </span>
                   </li>
@@ -567,6 +689,11 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
             <header className={cardHead}>
               <UserRound className="size-5 text-brand" />
               <h2 className="text-base font-bold">Customer &amp; Shipping Details</h2>
+              {admin && (
+                <span className="ml-auto">
+                  <EditOrder {...editing} label="Edit customer and shipping details" />
+                </span>
+              )}
             </header>
             <dl className="px-4 pb-4">
               <div className={detail}>
