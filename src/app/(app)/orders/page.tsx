@@ -1,6 +1,7 @@
 import { and, asc, count, desc, eq, exists, ilike, inArray, or, sql } from "drizzle-orm";
 import { Columns3, List } from "lucide-react";
 import Link from "next/link";
+import { ClickableRow } from "@/components/clickable-row";
 import { CopyButton } from "@/components/copy-button";
 import {
   Badge,
@@ -126,6 +127,8 @@ export default async function OrdersPage({
         deliveryCharge: orders.deliveryCharge,
         returnFee: orders.returnFee,
         exchangeOfId: orders.exchangeOfId,
+        oldItemsReceived: orders.oldItemsReceived,
+        oldItemsReceivedAt: orders.oldItemsReceivedAt,
         createdAt: orders.createdAt,
         customer: customers.name,
         phone: customers.phone,
@@ -148,6 +151,20 @@ export default async function OrdersPage({
       .orderBy(asc(deliveryCompanies.name)),
   ]);
 
+  // The orders that the exchanges on this page replace.
+  const replacedIds = rows.flatMap((row) => (row.exchangeOfId ? [row.exchangeOfId] : []));
+  const replaced = replacedIds.length
+    ? await db
+        .select({
+          id: orders.id,
+          number: orders.number,
+          ref: orders.trackingNumber,
+          status: orders.status,
+        })
+        .from(orders)
+        .where(inArray(orders.id, replacedIds))
+    : [];
+
   // What is in each order on this page: "1 M Black, 2 XL Grey" per product.
   const lines = rows.length
     ? await db
@@ -162,10 +179,7 @@ export default async function OrdersPage({
         .innerJoin(variants, eq(variants.id, orderItems.variantId))
         .innerJoin(products, eq(products.id, variants.productId))
         .where(
-          inArray(
-            orderItems.orderId,
-            rows.map((row) => row.id),
-          ),
+          inArray(orderItems.orderId, [...rows.map((row) => row.id), ...replacedIds]),
         )
         .orderBy(asc(products.name), asc(variants.createdAt))
     : [];
@@ -190,6 +204,27 @@ export default async function OrdersPage({
           : status === "delivered"
             ? "delivered"
             : "closed";
+  const said = (orderId: string) =>
+    [...(contents.get(orderId)?.products ?? [])]
+      .map(([product, what]) => `${product}: ${what.join(", ")}`)
+      .join(" · ");
+  const oldItemsOf = (row: (typeof rows)[number]): OrderCard["oldItems"] => {
+    const first = replaced.find((order) => order.id === row.exchangeOfId);
+    if (!first) return null;
+    return {
+      of: orderName(first.ref, first.number),
+      contents: said(first.id),
+      state:
+        row.oldItemsReceived === true
+          ? "received"
+          : first.status === "cancelled" || first.status === "returned"
+            ? "back"
+            : row.oldItemsReceived === false
+              ? "not"
+              : "ask",
+      when: when(row.oldItemsReceivedAt),
+    };
+  };
   const card = (row: (typeof rows)[number]): OrderCard => ({
     id: row.id,
     number: row.number,
@@ -198,11 +233,10 @@ export default async function OrdersPage({
     phone: row.phone,
     stage: stageOf(row.status),
     place: [row.city, row.area].filter(Boolean).join(" · "),
-    contents: [...(contents.get(row.id)?.products ?? [])]
-      .map(([product, what]) => `${product}: ${what.join(", ")}`)
-      .join(" · "),
+    contents: said(row.id),
     cod: row.payment === "cod" ? formatMoney(row.codAmount, currency) : "Paid",
     exchange: row.exchangeOfId !== null,
+    oldItems: oldItemsOf(row),
     company: row.company,
     companyId: row.companyId,
     portalAt: when(row.portalAt),
@@ -364,7 +398,12 @@ export default async function OrdersPage({
                 const inside = contents.get(row.id);
                 const shut = row.status === "cancelled" || row.status === "returned";
                 return (
-                  <tr key={row.id} data-order={row.number} className="align-top hover:bg-stone-50">
+                  <ClickableRow
+                    key={row.id}
+                    href={`/orders/${row.id}`}
+                    data-order={row.number}
+                    className="align-top hover:bg-brand-50/60"
+                  >
                     <td className={cell + " whitespace-nowrap text-stone-600"}>
                       {formatDate(row.createdAt, timezone)}
                     </td>
@@ -482,6 +521,15 @@ export default async function OrdersPage({
                             ` · ${formatMoney(row.deliveryCharge, currency)}`}
                         </span>
                       )}
+                      {row.exchangeOfId && row.status === "delivered" && (
+                        <span className="mt-1 block text-xs text-stone-500">
+                          {row.oldItemsReceived === true
+                            ? "Old items received back"
+                            : row.oldItemsReceived === false
+                              ? "Old items not received"
+                              : "Old items: not answered yet"}
+                        </span>
+                      )}
                       {row.status === "returned" && (
                         <span className="mt-1 block text-xs text-stone-500">
                           {row.returnFee === null
@@ -490,7 +538,7 @@ export default async function OrdersPage({
                         </span>
                       )}
                     </td>
-                  </tr>
+                  </ClickableRow>
                 );
               })}
             </tbody>

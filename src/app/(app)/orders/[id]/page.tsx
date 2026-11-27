@@ -246,6 +246,23 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
                   </Link>
                 </p>
               )}
+              {replaces && order.oldItemsReceived === true && (
+                <p className="text-emerald-700">
+                  Old items received back
+                  {order.oldItemsReceivedAt
+                    ? ` ${formatDateTime(order.oldItemsReceivedAt, timezone)}`
+                    : ""}{" "}
+                  and added to stock
+                </p>
+              )}
+              {replaces && order.oldItemsReceived === false && (
+                <p className="text-stone-600">Old items not received</p>
+              )}
+              {replaces && order.oldItemsReceived === null && order.status === "delivered" && (
+                <p className="text-amber-700">
+                  Old items: not answered yet. Use Actions on the orders list.
+                </p>
+              )}
               {replacedBy.map((next) => (
                 <p key={next.id}>
                   Exchanged with{" "}

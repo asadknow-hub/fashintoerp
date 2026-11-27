@@ -41,7 +41,8 @@ export function Modal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-stone-900/45 p-3 sm:p-6"
+      data-modal
+      className="fixed inset-0 z-50 flex cursor-default items-start justify-center overflow-y-auto bg-stone-900/45 p-3 sm:p-6"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}

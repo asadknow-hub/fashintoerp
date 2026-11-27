@@ -26,6 +26,15 @@ export type OrderCard = {
   contents: string;
   cod: string;
   exchange: boolean;
+  // For an exchange: the order it replaces, what was in it, and whether
+  // those pieces came back ("back" = that order was itself returned or
+  // cancelled, so they are in stock already).
+  oldItems: {
+    of: string;
+    contents: string;
+    state: "ask" | "received" | "not" | "back";
+    when: string | null;
+  } | null;
   company: string | null;
   companyId: string | null;
   // When each step was done; null if not yet.
@@ -105,6 +114,7 @@ export function StepsModal({
   const [charge, setCharge] = useState(
     order.deliveryCharge === null ? "" : String(order.deliveryCharge),
   );
+  const [oldItems, setOldItems] = useState(order.oldItems?.state === "not" ? "not" : "");
   const [customerPays, setCustomerPays] = useState(false);
   const [returnFee, setReturnFee] = useState("");
 
@@ -336,6 +346,50 @@ export function StepsModal({
               )}
             </div>
           </div>
+
+          {order.oldItems && delivered && (
+            <div className={row + " border-violet-200 bg-violet-50"} data-old-items>
+              <div className="min-w-0 flex-1">
+                <p className="font-semibold">Old items from Order {order.oldItems.of}</p>
+                <p className="text-xs text-stone-600">{order.oldItems.contents}</p>
+                {order.oldItems.state === "received" ? (
+                  <p className="mt-1.5 text-xs font-semibold text-emerald-700">
+                    Received back{order.oldItems.when ? ` ${order.oldItems.when}` : ""} and added
+                    to stock.
+                  </p>
+                ) : order.oldItems.state === "back" ? (
+                  <p className="mt-1.5 text-xs text-stone-600">
+                    That order was returned or cancelled, so its pieces are already back in stock.
+                  </p>
+                ) : (
+                  <div className="mt-2 space-y-1.5">
+                    <label className="flex cursor-pointer items-center gap-2">
+                      <input
+                        type="radio"
+                        name="oldItems"
+                        value="received"
+                        checked={oldItems === "received"}
+                        onChange={() => setOldItems("received")}
+                        className="size-4 accent-[#5b4fd9]"
+                      />
+                      Received back — add them to stock
+                    </label>
+                    <label className="flex cursor-pointer items-center gap-2">
+                      <input
+                        type="radio"
+                        name="oldItems"
+                        value="not"
+                        checked={oldItems === "not"}
+                        onChange={() => setOldItems("not")}
+                        className="size-4 accent-[#5b4fd9]"
+                      />
+                      Not received
+                    </label>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           {result?.error && (
             <p role="alert" className="text-sm font-semibold text-rose-700">

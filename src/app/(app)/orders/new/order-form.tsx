@@ -607,6 +607,8 @@ type Draft = {
   notes: string;
   // Only kept when a day other than today was picked.
   orderDate?: string;
+  // True while the FO number is still the one the system filled in.
+  refAuto?: boolean;
 };
 
 function readDraft(): Draft | null {
@@ -649,7 +651,7 @@ type Props = {
   timezone: string;
   // Lines offered under "Instruction": the usual one, then ones used before.
   instructions: string[];
-  // The number after the last FO ref used, as a hint of what comes next.
+  // The next FO number, which the form starts with.
   nextRef: string;
   // The title of the screen; the order date sits beside it.
   header: React.ReactNode;
@@ -731,9 +733,12 @@ function Editor({
     },
   );
   // Only the number is typed; "FO" always goes in front of it.
-  // An exchange starts with the next FO number already in the box.
+  // The box starts with the next FO number; it can be changed. A number that
+  // was only ever the system's suggestion is refreshed when a draft comes
+  // back, since someone may have used it meanwhile.
+  const [refAuto, setRefAuto] = useState(draft ? draft.refAuto === true : true);
   const [shipperRef, setShipperRef] = useState(
-    (draft?.shipperRef ?? (defaults.exchange ? nextRef : "")).replace(/\D/g, ""),
+    (draft && draft.refAuto !== true ? draft.shipperRef : nextRef).replace(/\D/g, ""),
   );
   const fullRef = shipperRef ? REF_PREFIX + shipperRef : "";
   const [refNote, setRefNote] = useState<RefNote | null>(null);
@@ -750,14 +755,21 @@ function Editor({
 
   const touched =
     rows.some((row) => row.productId) ||
-    !!(customer.name || customer.phone || customer.street || shipperRef || notes || instruction);
+    !!(
+      customer.name ||
+      customer.phone ||
+      customer.street ||
+      (shipperRef && !refAuto) ||
+      notes ||
+      instruction
+    );
 
   // Keep a copy of everything typed, so a refresh doesn't lose it.
   useEffect(() => {
     if (fromChat) return;
     writeDraft(
       touched
-        ? { rows, customer, shipperRef, shippingFee, cod, instruction, notes, orderDate }
+        ? { rows, customer, shipperRef, shippingFee, cod, instruction, notes, orderDate, refAuto }
         : null,
     );
   }, [
@@ -771,6 +783,7 @@ function Editor({
     instruction,
     notes,
     orderDate,
+    refAuto,
   ]);
 
   // While a shipper ref is in the box, keep asking the system about it: is
@@ -782,7 +795,11 @@ function Editor({
     const ask = async () => {
       try {
         const note = await watchShipperRef(fullRef);
-        if (!stopped) setRefNote(note);
+        if (stopped) return;
+        // A number the system suggested that got used meanwhile: move on to
+        // the next free one. A typed number is left for the person to change.
+        if (refAuto && note?.usedBy && note.next) setShipperRef(note.next);
+        else setRefNote(note);
       } catch {
         // Offline for a moment; the next round will catch up.
       }
@@ -796,14 +813,15 @@ function Editor({
       clearTimeout(first);
       clearInterval(again);
     };
-  }, [fullRef]);
+  }, [fullRef, refAuto]);
   const refNow = refNote && refNote.ref === fullRef ? refNote : null;
 
   const startOver = () => {
     if (fullRef) void releaseShipperRef().catch(() => {});
     setRows([blank(0)]);
     setCustomer(noCustomer());
-    setShipperRef("");
+    setShipperRef(nextRef);
+    setRefAuto(true);
     setRefNote(null);
     setOrderDate("");
     setShippingFee("");
@@ -952,7 +970,9 @@ function Editor({
     ? "Fix the item marked in red before creating the order."
     : ready.length === 0
       ? "Add at least one product."
-      : !customer.name.trim()
+      : !shipperRef
+        ? "Enter the FO number."
+        : !customer.name.trim()
         ? "Enter the receiver's name."
         : !customer.phone.trim()
           ? "Enter mobile 1."
@@ -1077,7 +1097,7 @@ function Editor({
         <div className="space-y-4 p-4">
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <label className="block">
-              <Label>Shipper Ref</Label>
+              <Label required>Shipper Ref</Label>
               <IconBox
                 icon={Hash}
                 className={refNow?.usedBy ? "border-rose-500" : ""}
@@ -1090,9 +1110,10 @@ function Editor({
                   inputMode="numeric"
                   autoComplete="off"
                   value={shipperRef}
-                  onChange={(event) =>
-                    setShipperRef(event.target.value.replace(/\D/g, "").slice(0, 12))
-                  }
+                  onChange={(event) => {
+                    setRefAuto(false);
+                    setShipperRef(event.target.value.replace(/\D/g, "").slice(0, 12));
+                  }}
                   placeholder={nextRef}
                   className={inside + " font-semibold"}
                 />

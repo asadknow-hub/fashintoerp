@@ -5,13 +5,14 @@ import { db } from "@/db";
 import { customers, orders, productMedia, products, variants } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
 import { isUuid, orderName, sortSizes } from "@/lib/format";
+import { nextRefNumber } from "@/lib/order-ref";
 import { getPrefs } from "@/lib/settings";
 import { OrderForm, type OrderProduct } from "./order-form";
 
 export default async function NewOrderPage({
   searchParams,
 }: PageProps<"/orders/new">) {
-  const [, params, { currency, timezone }, used, [lastRef], rows] = await Promise.all([
+  const [user, params, { currency, timezone }, used, rows] = await Promise.all([
     requireUser(),
     searchParams,
     getPrefs(),
@@ -23,13 +24,6 @@ export default async function NewOrderPage({
       .groupBy(orders.instruction)
       .orderBy(desc(sql`count(*)`), asc(orders.instruction))
       .limit(12),
-    // The highest FO number used so far.
-    db
-      .select({ ref: orders.trackingNumber })
-      .from(orders)
-      .where(sql`${orders.trackingNumber} ~ '^FO[0-9]{1,12}$'`)
-      .orderBy(desc(sql`substring(${orders.trackingNumber} from 3)::numeric`))
-      .limit(1),
     db
       .select({
         id: variants.id,
@@ -123,11 +117,7 @@ export default async function NewOrderPage({
       instructions.push(line);
     }
   }
-  // After FO002 comes 003, keeping the zeros in front.
-  const lastDigits = lastRef?.ref?.slice(2) ?? "";
-  const nextRef = lastDigits
-    ? String(BigInt(lastDigits) + BigInt(1)).padStart(lastDigits.length, "0")
-    : "001";
+  const nextRef = await nextRefNumber(user.id);
 
   const header = (
       <div className="flex items-center gap-4">

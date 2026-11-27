@@ -25,9 +25,17 @@ import {
   text,
   variantLabel,
 } from "@/lib/format";
+import { nextRefNumber } from "@/lib/order-ref";
 import { getPrefs } from "@/lib/settings";
 import { changeStock, StockError } from "@/lib/stock";
 import type { Tx } from "@/db";
+
+// The database refuses a second order with the same FO number.
+const isDuplicate = (err: unknown) =>
+  typeof err === "object" &&
+  err !== null &&
+  ((err as { code?: string }).code === "23505" ||
+    (err as { cause?: { code?: string } }).cause?.code === "23505");
 
 // "fo 002" and "FO002" are the same reference.
 const cleanRef = (value: string) => value.toUpperCase().replace(/\s+/g, "").slice(0, 40);
@@ -51,6 +59,18 @@ function readOrderDate(form: FormData, timezone: string) {
   if (!real) return { error: "Choose a real order date." };
   if (typed > todayIn(timezone)) return { error: "The order date can't be in the future." };
   return { date: typed };
+}
+
+// True when this order's pieces already came back through an exchange (the
+// exchange was delivered and its old items were marked received). Returning
+// or cancelling the order afterwards must not add them to stock again.
+async function alreadyBack(tx: Tx, orderId: string) {
+  const [exchange] = await tx
+    .select({ id: orders.id })
+    .from(orders)
+    .where(and(eq(orders.exchangeOfId, orderId), eq(orders.oldItemsReceived, true)))
+    .limit(1);
+  return exchange !== undefined;
 }
 
 // One shipper ref belongs to one order. Taking a lock on the ref first means
@@ -142,8 +162,10 @@ export async function createOrder(
   if (lines.length === 0) return { error: "Add at least one item." };
   if (shippingFee === null) return { error: "Delivery must be a number." };
   if (codTyped === "" || codAmount === null) return { error: "Enter the COD amount (0 if already paid)." };
-  if (shipperRef && !/^FO\d{1,12}$/.test(shipperRef)) {
-    return { error: "The shipper ref is FO followed by its number." };
+  // The FO number is how the business knows an order, so every order has one.
+  if (!shipperRef) return { error: "Enter the FO number." };
+  if (!/^FO\d{1,12}$/.test(shipperRef)) {
+    return { error: "The FO number is FO followed by its number." };
   }
   if ("error" in picked) return { error: picked.error };
   // An order dated today is saved with this moment; an earlier day keeps
@@ -162,7 +184,7 @@ export async function createOrder(
   let orderId: string;
   try {
     orderId = await db.transaction(async (tx) => {
-      if (shipperRef) await refuseUsedRef(tx, shipperRef);
+      await refuseUsedRef(tx, shipperRef);
       if (exchangeOf) {
         const [original] = await tx
           .select({ id: orders.id })
@@ -278,6 +300,7 @@ export async function createOrder(
     });
   } catch (err) {
     if (err instanceof StockError) return { error: err.message };
+    if (isDuplicate(err)) return { error: `${shipperRef} is already used on another order.` };
     throw err;
   }
 
@@ -333,6 +356,9 @@ export async function updateOrder(
         .where(eq(orders.id, orderId))
         .for("update");
       if (!order) throw new StockError("Order not found.");
+      if (order.trackingNumber && !typedRef) {
+        throw new StockError("An order must keep an FO number.");
+      }
       if (typedRef && cleanRef(typedRef) !== cleanRef(order.trackingNumber ?? "")) {
         await refuseUsedRef(tx, cleanRef(typedRef), orderId);
       }
@@ -343,7 +369,7 @@ export async function updateOrder(
       }
 
       // Cancelling or returning puts the items back on the shelf.
-      if (closed.includes(status) && order.status !== status) {
+      if (closed.includes(status) && order.status !== status && !(await alreadyBack(tx, orderId))) {
         const items = await tx
           .select()
           .from(orderItems)
@@ -367,7 +393,7 @@ export async function updateOrder(
           ...stamps(status),
           ...(status === "returned" &&
             order.status !== "returned" && { returnedAt: sql`now()` }),
-          trackingNumber: typedRef,
+          trackingNumber: typedRef ? cleanRef(typedRef) : null,
           notes: optional(form, "notes"),
           // A changed date keeps the order's time of day.
           ...(picked.date && {
@@ -378,6 +404,7 @@ export async function updateOrder(
     });
   } catch (err) {
     if (err instanceof StockError) return { error: err.message };
+    if (isDuplicate(err)) return { error: "That FO number is already used on another order." };
     throw err;
   }
   refresh();
@@ -454,7 +481,13 @@ export async function watchShipperRef(typed: string) {
         ),
       ),
   ]);
-  return { ref, usedBy: usedBy ?? null, others: others.map((other) => other.name) };
+  return {
+    ref,
+    usedBy: usedBy ?? null,
+    others: others.map((other) => other.name),
+    // Only needed when this one is taken: the number to move on to.
+    next: usedBy ? await nextRefNumber(user.id) : null,
+  };
 }
 
 // The ref was cleared or the order was abandoned.
@@ -471,7 +504,7 @@ export async function setOrderProgress(
   _state: ActionState,
   form: FormData,
 ): Promise<ActionState> {
-  await requireUser();
+  const user = await requireUser();
   if (!isUuid(orderId)) return { error: "Order not found." };
   // A later step means the earlier ones happened too.
   const delivered = form.get("delivered") === "on";
@@ -487,13 +520,55 @@ export async function setOrderProgress(
   try {
     await db.transaction(async (tx) => {
       const [order] = await tx
-        .select({ status: orders.status })
+        .select({
+          status: orders.status,
+          number: orders.number,
+          ref: orders.trackingNumber,
+          exchangeOfId: orders.exchangeOfId,
+          oldItemsReceived: orders.oldItemsReceived,
+        })
         .from(orders)
         .where(eq(orders.id, orderId))
         .for("update");
       if (!order) throw new StockError("Order not found.");
       if (closed.includes(order.status)) {
         throw new StockError(`This order is ${order.status}, so its steps can't be changed.`);
+      }
+
+      // An exchange that has been delivered: did the old pieces come back?
+      // Only a "yes" puts them back into stock, and only the first time.
+      const oldItems = text(form, "oldItems");
+      let received: { oldItemsReceived: boolean; oldItemsReceivedAt: ReturnType<typeof sql> | null } | null =
+        null;
+      if (delivered && order.exchangeOfId && order.oldItemsReceived !== true) {
+        if (oldItems === "received") {
+          const [first] = await tx
+            .select({ id: orders.id, status: orders.status })
+            .from(orders)
+            .where(eq(orders.id, order.exchangeOfId))
+            .for("update");
+          // A first order that was itself returned or cancelled already
+          // gave its pieces back.
+          if (first && !closed.includes(first.status)) {
+            const items = await tx
+              .select()
+              .from(orderItems)
+              .where(eq(orderItems.orderId, first.id));
+            for (const item of items) {
+              await changeStock(tx, {
+                variantId: item.variantId,
+                change: item.quantity,
+                reason: "return",
+                note: `Exchange ${orderName(order.ref, order.number)}: old items received back`,
+                orderId: first.id,
+                userId: user.id,
+              });
+            }
+          }
+          received = { oldItemsReceived: true, oldItemsReceivedAt: sql`now()` };
+        } else if (oldItems === "not") {
+          received = { oldItemsReceived: false, oldItemsReceivedAt: null };
+        }
       }
       if (portal) {
         const [company] = await tx
@@ -510,6 +585,7 @@ export async function setOrderProgress(
           ...stamps(status),
           deliveryCompanyId: portal ? companyId : null,
           deliveryCharge: charge,
+          ...received,
         })
         .where(eq(orders.id, orderId));
     });
@@ -548,7 +624,9 @@ export async function createReturn(
       if (closed.includes(order.status)) {
         throw new StockError(`This order is already ${order.status}.`);
       }
-      const items = await tx.select().from(orderItems).where(eq(orderItems.orderId, orderId));
+      const items = (await alreadyBack(tx, orderId))
+        ? []
+        : await tx.select().from(orderItems).where(eq(orderItems.orderId, orderId));
       for (const item of items) {
         await changeStock(tx, {
           variantId: item.variantId,

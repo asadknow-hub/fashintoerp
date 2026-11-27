@@ -333,6 +333,11 @@ export const orders = pgTable(
     // Set on an order that replaces another one: the order it is an
     // exchange for.
     exchangeOfId: uuid("exchange_of_id"),
+    // For an exchange, once it is delivered: did the pieces of the order it
+    // replaces come back? Empty until answered. Saying yes puts those pieces
+    // back into stock, once.
+    oldItemsReceived: boolean("old_items_received"),
+    oldItemsReceivedAt: timestamp("old_items_received_at", { withTimezone: true }),
     shippingFee: money("shipping_fee").notNull().default("0"),
     discount: money("discount").notNull().default("0"),
     total: money("total").notNull().default("0"),
