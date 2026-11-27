@@ -61,6 +61,17 @@ function readOrderDate(form: FormData, timezone: string) {
   return { date: typed };
 }
 
+// The name of the order that replaced this one in an exchange, if there is
+// one that was not cancelled.
+async function liveExchange(tx: Tx, orderId: string) {
+  const [next] = await tx
+    .select({ number: orders.number, ref: orders.trackingNumber })
+    .from(orders)
+    .where(and(eq(orders.exchangeOfId, orderId), ne(orders.status, "cancelled")))
+    .limit(1);
+  return next ? orderName(next.ref, next.number) : null;
+}
+
 // One shipper ref belongs to one order. Taking a lock on the ref first means
 // two people saving the same one at the same moment can't both get through.
 async function refuseUsedRef(tx: Tx, ref: string, exceptOrderId?: string) {
@@ -103,12 +114,15 @@ function readLines(form: FormData): Line[] | null {
     if (!Number.isFinite(discount) || discount < 0 || discount > quantity * price + 0.005) {
       return null;
     }
-    const existing = merged.get(variantId);
+    // The same item twice at the same price is one line; at different
+    // prices (one of them a gift, say) it stays two.
+    const key = `${variantId}|${price.toFixed(2)}`;
+    const existing = merged.get(key);
     if (existing) {
       existing.quantity += quantity;
       existing.discount = (Number(existing.discount) + discount).toFixed(2);
     } else {
-      merged.set(variantId, {
+      merged.set(key, {
         variantId,
         quantity,
         unitPrice: price.toFixed(2),
@@ -165,8 +179,10 @@ export async function createOrder(
 
   const subtotal = lines.reduce((sum, line) => sum + lineTotal(line), 0);
   const total = subtotal + Number(shippingFee);
-  // Nothing to collect on delivery means it was paid already.
-  const payment = Number(codAmount) > 0 ? "cod" : "prepaid";
+  // Nothing to collect on delivery means it was paid already. Not on an
+  // exchange though: there the goods were paid for on the first order, and a
+  // COD of zero means the business covers the delivery charge.
+  const payment = Number(codAmount) > 0 || exchangeOf ? "cod" : "prepaid";
   const where = { country, city, area, address: street };
 
   let orderId: string;
@@ -176,16 +192,49 @@ export async function createOrder(
       // An exchange goes out with the same delivery company as the order
       // it replaces, unless another one is picked later.
       let exchangeCompany: string | null = null;
+      let refundBase: string | null = null;
       if (exchangeOf) {
         const [original] = await tx
-          .select({ id: orders.id, companyId: orders.deliveryCompanyId })
+          .select({
+            id: orders.id,
+            status: orders.status,
+            number: orders.number,
+            ref: orders.trackingNumber,
+            companyId: orders.deliveryCompanyId,
+            payment: orders.payment,
+            codAmount: orders.codAmount,
+            total: orders.total,
+            exchangeOfId: orders.exchangeOfId,
+            refundBase: orders.refundBase,
+          })
           .from(orders)
-          .where(eq(orders.id, exchangeOf));
+          .where(eq(orders.id, exchangeOf))
+          .for("update");
         if (!original) throw new StockError("The order being exchanged was not found.");
+        if (original.status !== "delivered") {
+          throw new StockError("Only a delivered order can be exchanged.");
+        }
+        const swapped = await liveExchange(tx, original.id);
+        if (swapped) {
+          throw new StockError(
+            `Order ${orderName(original.ref, original.number)} was already exchanged with ${swapped}. Exchange that order instead.`,
+          );
+        }
         exchangeCompany = original.companyId;
+        // What the customer paid for the goods, carried along a chain of exchanges.
+        refundBase =
+          original.refundBase ??
+          (original.payment === "cod" || original.exchangeOfId
+            ? original.codAmount
+            : original.total);
       }
       // Check stock first (and hold it) so a refused order never uses up
       // an order number.
+      // How many of each item the order takes, over all its lines.
+      const wanted = new Map<string, number>();
+      for (const line of lines) {
+        wanted.set(line.variantId, (wanted.get(line.variantId) ?? 0) + line.quantity);
+      }
       const found = await tx
         .select({
           id: variants.id,
@@ -196,24 +245,19 @@ export async function createOrder(
         })
         .from(variants)
         .innerJoin(products, eq(products.id, variants.productId))
-        .where(
-          inArray(
-            variants.id,
-            lines.map((l) => l.variantId),
-          ),
-        )
+        .where(inArray(variants.id, [...wanted.keys()]))
         .for("update", { of: variants });
-      if (found.length !== lines.length) {
+      if (found.length !== wanted.size) {
         throw new StockError("One of the items no longer exists.");
       }
-      for (const line of lines) {
-        const item = found.find((v) => v.id === line.variantId)!;
-        if (line.quantity > item.stock) {
+      for (const item of found) {
+        const quantity = wanted.get(item.id)!;
+        if (quantity > item.stock) {
           const what = `${item.name} · ${variantLabel(item)}`;
           throw new StockError(
             item.stock <= 0
               ? `${what} is out of stock and can't be ordered. Someone may have just sold the last one.`
-              : `Only ${item.stock} left of ${what}, so ${line.quantity} can't be ordered.`,
+              : `Only ${item.stock} left of ${what}, so ${quantity} can't be ordered.`,
           );
         }
       }
@@ -260,6 +304,7 @@ export async function createOrder(
           notes: optional(form, "notes"),
           trackingNumber: shipperRef,
           exchangeOfId: exchangeOf || null,
+          refundBase,
           deliveryCompanyId: exchangeCompany,
           createdBy: user.id,
           ...(createdAt && { createdAt }),
@@ -340,13 +385,16 @@ export async function saveOrderNote(
   return { ok: "Note saved." };
 }
 
-// The pencil on the order page: its date and its FO number.
+// The pencil on the order page. Anyone can correct the date and the FO
+// number. A System Admin can also correct everything else that was typed
+// when the order was taken: the receiver, the mobiles, the address, the COD,
+// the delivery fee and the instruction.
 export async function editOrder(
   orderId: string,
   _state: ActionState,
   form: FormData,
 ): Promise<ActionState> {
-  await requireUser();
+  const user = await requireUser();
   if (!isUuid(orderId)) return { error: "Order not found." };
   const ref = cleanRef(text(form, "ref"));
   if (!ref) return { error: "An order must have an FO number." };
@@ -355,18 +403,84 @@ export async function editOrder(
   const picked = readOrderDate(form, timezone);
   if ("error" in picked) return { error: picked.error };
 
+  // The rest of the details: only sent by, and only taken from, an admin.
+  const full = form.has("name");
+  if (full && user.role !== "owner") return { error: "Only a System Admin can change these details." };
+  const name = text(form, "name");
+  const phone = cleanPhone(text(form, "phone")) || null;
+  const phone2 = cleanPhone(text(form, "phone2")) || null;
+  const country = optional(form, "country");
+  const city = optional(form, "city");
+  const area = optional(form, "area");
+  const street = optional(form, "street");
+  const codAmount = amount(form, "cod");
+  const shippingFee = amount(form, "shippingFee");
+  if (full) {
+    if (!name) return { error: "Enter the receiver's name." };
+    if (!phone) return { error: "Enter the receiver's mobile number." };
+    if (!country || !city || !area) return { error: "Enter the country, city and area." };
+    if (text(form, "cod") === "" || codAmount === null) return { error: "The COD must be a number." };
+    if (text(form, "shippingFee") === "" || shippingFee === null) {
+      return { error: "The delivery fee must be a number." };
+    }
+  }
+
   try {
     await db.transaction(async (tx) => {
       const [order] = await tx
-        .select({ ref: orders.trackingNumber })
+        .select({
+          ref: orders.trackingNumber,
+          customerId: orders.customerId,
+          exchangeOfId: orders.exchangeOfId,
+        })
         .from(orders)
         .where(eq(orders.id, orderId))
         .for("update");
       if (!order) throw new StockError("Order not found.");
       if (ref !== cleanRef(order.ref ?? "")) await refuseUsedRef(tx, ref, orderId);
+
+      let details = {};
+      if (full) {
+        // The order follows the mobile number: if it now belongs to another
+        // customer the order moves to them, otherwise this customer is corrected.
+        const [other] = await tx
+          .select({ id: customers.id })
+          .from(customers)
+          .where(and(eq(customers.phone, phone!), ne(customers.id, order.customerId)))
+          .limit(1);
+        const customerId = other?.id ?? order.customerId;
+        await tx
+          .update(customers)
+          .set({ name, phone, phone2, country, city, area, address: street })
+          .where(eq(customers.id, customerId));
+        const [items] = await tx
+          .select({
+            net: sql<string>`coalesce(sum(${orderItems.quantity} * ${orderItems.unitPrice} - ${orderItems.discount}), 0)`,
+          })
+          .from(orderItems)
+          .where(eq(orderItems.orderId, orderId));
+        details = {
+          customerId,
+          phone2,
+          country,
+          city,
+          area,
+          street,
+          shippingAddress: [street, area, city, country].filter(Boolean).join(", "),
+          codAmount,
+          // Nothing to collect on delivery means it was paid already.
+          payment:
+            Number(codAmount) > 0 || order.exchangeOfId ? ("cod" as const) : ("prepaid" as const),
+          shippingFee,
+          total: (Number(items.net) + Number(shippingFee)).toFixed(2),
+          instruction: optional(form, "instruction"),
+        };
+      }
+
       await tx
         .update(orders)
         .set({
+          ...details,
           trackingNumber: ref,
           // A changed date keeps the order's time of day.
           ...(picked.date && {
@@ -382,6 +496,57 @@ export async function editOrder(
   }
   refresh();
   return { ok: "Saved." };
+}
+
+// Deletes an order for good. Only a System Admin can. Its pieces that are
+// still out (not already put back into stock, and not discarded) go back
+// into stock if asked: right for an order entered by mistake, wrong for one
+// whose pieces really are with a customer.
+export async function deleteOrder(
+  orderId: string,
+  _state: ActionState,
+  form: FormData,
+): Promise<ActionState> {
+  const user = await requireUser();
+  if (user.role !== "owner") return { error: "Only a System Admin can delete an order." };
+  if (!isUuid(orderId)) return { error: "Order not found." };
+  const restock = form.get("restock") === "on";
+
+  try {
+    await db.transaction(async (tx) => {
+      const [order] = await tx
+        .select({ number: orders.number, ref: orders.trackingNumber })
+        .from(orders)
+        .where(eq(orders.id, orderId))
+        .for("update");
+      if (!order) throw new StockError("Order not found.");
+      if (restock) {
+        const items = await tx
+          .select()
+          .from(orderItems)
+          .where(eq(orderItems.orderId, orderId))
+          .for("update");
+        for (const item of items) {
+          if (item.backState === "stock" || item.backState === "discarded") continue;
+          await changeStock(tx, {
+            variantId: item.variantId,
+            change: item.quantity,
+            reason: "cancelled",
+            note: `Order ${orderName(order.ref, order.number)} deleted`,
+            orderId,
+            userId: user.id,
+          });
+        }
+      }
+      // An exchange made for this order stands on its own from now on.
+      await tx.update(orders).set({ exchangeOfId: null }).where(eq(orders.exchangeOfId, orderId));
+      await tx.delete(orders).where(eq(orders.id, orderId));
+    });
+  } catch (err) {
+    if (err instanceof StockError) return { error: err.message };
+    throw err;
+  }
+  return { go: "/orders" };
 }
 
 // Looks up a returning customer by phone so their details can be filled in.
@@ -489,6 +654,8 @@ export async function setOrderProgress(
   if (delivered && (text(form, "deliveryCharge") === "" || charge === null)) {
     return { error: "Confirm the delivery charge for this order." };
   }
+  // The state the pop-up was opened on.
+  const was = text(form, "was");
 
   try {
     await db.transaction(async (tx) => {
@@ -501,7 +668,32 @@ export async function setOrderProgress(
       if (closed.includes(order.status)) {
         throw new StockError(`This order is ${order.status}, so its steps can't be changed.`);
       }
-
+      // Someone else moved the order while this pop-up was open: saving
+      // these ticks would undo what they did.
+      if (was && was !== order.status) {
+        throw new StockError(
+          "Someone else changed this order a moment ago. Close this, check the order, and try again.",
+        );
+      }
+      // A delivered order that was exchanged, or whose pieces have started
+      // coming back, can't be un-delivered: its money and stock are settled.
+      if (order.status === "delivered" && !delivered) {
+        const swapped = await liveExchange(tx, orderId);
+        const [settledItem] = await tx
+          .select({ id: orderItems.id })
+          .from(orderItems)
+          .where(
+            and(eq(orderItems.orderId, orderId), inArray(orderItems.backState, ["stock", "discarded"])),
+          )
+          .limit(1);
+        if (swapped || settledItem) {
+          throw new StockError(
+            swapped
+              ? `This order was exchanged with ${swapped}, so it has to stay delivered.`
+              : "Pieces of this order have already come back, so it has to stay delivered.",
+          );
+        }
+      }
       if (portal) {
         const [company] = await tx
           .select({ id: deliveryCompanies.id })
@@ -571,8 +763,14 @@ export async function cancelOrder(
         throw new StockError("The parcel has not been dispatched, so it can't have been opened.");
       }
       if (!isOut(order)) {
-        const items = await tx.select().from(orderItems).where(eq(orderItems.orderId, orderId));
+        const items = await tx
+          .select()
+          .from(orderItems)
+          .where(eq(orderItems.orderId, orderId))
+          .for("update");
         for (const item of items) {
+          // A piece that was already put back or thrown away is settled.
+          if (item.backState === "stock" || item.backState === "discarded") continue;
           await changeStock(tx, {
             variantId: item.variantId,
             change: item.quantity,
@@ -581,11 +779,11 @@ export async function cancelOrder(
             orderId,
             userId: user.id,
           });
+          await tx
+            .update(orderItems)
+            .set({ backState: "stock", backAt: sql`now()` })
+            .where(eq(orderItems.id, item.id));
         }
-        await tx
-          .update(orderItems)
-          .set({ backState: "stock", backAt: sql`now()` })
-          .where(eq(orderItems.orderId, orderId));
       }
       await tx
         .update(orders)
@@ -630,6 +828,8 @@ export async function createReturn(
           payment: orders.payment,
           codAmount: orders.codAmount,
           total: orders.total,
+          exchangeOfId: orders.exchangeOfId,
+          refundBase: orders.refundBase,
         })
         .from(orders)
         .where(eq(orders.id, orderId))
@@ -639,7 +839,17 @@ export async function createReturn(
       if (order.status !== "delivered") {
         throw new StockError("Only a delivered order can be returned. Cancel this one instead.");
       }
-      const paid = Number(order.payment === "cod" ? order.codAmount : order.total);
+      // The customer now holds the pieces of the order that replaced this one.
+      const swapped = await liveExchange(tx, orderId);
+      if (swapped) {
+        throw new StockError(
+          `This order was exchanged with ${swapped}. Create the return on that order instead.`,
+        );
+      }
+      const paid = Number(
+        order.refundBase ??
+          (order.payment === "cod" || order.exchangeOfId ? order.codAmount : order.total),
+      );
       if (Number(fee) > paid + 0.005) {
         throw new StockError("The customer can't cover more than they paid for the order.");
       }
@@ -693,12 +903,13 @@ export async function settleItem(
 
   try {
     await db.transaction(async (tx) => {
-      const [item] = await tx
-        .select()
+      // The order is locked before its item, the same way round as
+      // everywhere else, so two people can't block each other.
+      const [which] = await tx
+        .select({ orderId: orderItems.orderId })
         .from(orderItems)
-        .where(eq(orderItems.id, itemId))
-        .for("update");
-      if (!item) throw new StockError("That item was not found.");
+        .where(eq(orderItems.id, itemId));
+      if (!which) throw new StockError("That item was not found.");
       const [order] = await tx
         .select({
           id: orders.id,
@@ -708,13 +919,16 @@ export async function settleItem(
           dispatchedAt: orders.dispatchedAt,
         })
         .from(orders)
-        .where(eq(orders.id, item.orderId))
+        .where(eq(orders.id, which.orderId))
         .for("update");
-      const [exchange] = await tx
-        .select({ id: orders.id })
-        .from(orders)
-        .where(eq(orders.exchangeOfId, item.orderId))
-        .limit(1);
+      const [item] = await tx
+        .select()
+        .from(orderItems)
+        .where(eq(orderItems.id, itemId))
+        .for("update");
+      if (!order || !item) throw new StockError("That item was not found.");
+      // Only an exchange that was not cancelled brings the old pieces back.
+      const exchange = (await liveExchange(tx, order.id)) ?? undefined;
       // Pieces only come back from a return, a parcel refused after it was
       // sent out, or an order that was exchanged.
       const comingBack =

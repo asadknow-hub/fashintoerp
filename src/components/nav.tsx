@@ -9,6 +9,7 @@ import {
   Settings,
   ShoppingBag,
   ShoppingCart,
+  UserCog,
   Users,
 } from "lucide-react";
 import Link from "next/link";
@@ -56,6 +57,7 @@ const menu: Entry[] = [
   },
   { label: "Customers", href: "/customers", icon: Users },
   { label: "Reports", href: "/reports", icon: ChartColumn },
+  { label: "Staff", href: "/staff", icon: UserCog },
   { label: "Settings", href: "/settings", icon: Settings },
 ];
 
@@ -99,7 +101,9 @@ function place(pathname: string, params: URLSearchParams): Place {
   }
   if (pathname.startsWith("/customers")) return { section: "Customers" };
   if (pathname.startsWith("/reports")) return { section: "Reports" };
-  if (pathname.startsWith("/staff")) return { section: "Settings", page: "Staff" };
+  if (pathname === "/staff") return { section: "Staff" };
+  if (pathname === "/staff/new") return { section: "Staff", page: "Add Staff" };
+  if (pathname.startsWith("/staff/")) return { section: "Staff", page: "Staff Member" };
   if (pathname.startsWith("/inbox")) return { section: "Settings", page: "Inbox" };
   if (pathname.startsWith("/automations")) return { section: "Settings", page: "Auto Replies" };
   if (pathname.startsWith("/settings")) return { section: "Settings" };
@@ -116,7 +120,8 @@ const row =
 const idle = "text-stone-700 hover:bg-stone-200/70 hover:text-stone-900";
 const lit = "bg-brand-100 text-brand";
 
-export function Nav() {
+// `staff` is whether to show the Staff entry: only a System Admin manages staff.
+export function Nav({ staff }: { staff: boolean }) {
   const here = usePlace();
   // The section you are in is the one that is open. Arrows clicked by hand
   // win until you move to another section.
@@ -130,7 +135,9 @@ export function Nav() {
 
   return (
     <nav className="flex min-h-0 flex-col gap-0.5 overflow-y-auto">
-      {menu.map((entry) => {
+      {menu
+        .filter((entry) => staff || entry.label !== "Staff")
+        .map((entry) => {
         const inside = here.section === entry.label;
         if (!entry.items) {
           return (

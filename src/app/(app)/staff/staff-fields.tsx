@@ -31,18 +31,18 @@ export function StaffFields({
           hint={
             self
               ? "You can't change your own role."
-              : "Owners can manage staff and business settings."
+              : "A System Admin can manage staff and settings, and edit or delete any order."
           }
         >
           {self ? (
             <>
               <input type="hidden" name="role" value="owner" />
-              <input value="Owner" disabled className="input bg-stone-100" />
+              <input value="System Admin" disabled className="input bg-stone-100" />
             </>
           ) : (
             <select name="role" defaultValue={staff?.role ?? "staff"} className="input">
               <option value="staff">Staff</option>
-              <option value="owner">Owner</option>
+              <option value="owner">System Admin</option>
             </select>
           )}
         </Field>

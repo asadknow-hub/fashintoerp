@@ -23,6 +23,11 @@ export type OrderCard = {
   customer: string;
   phone: string | null;
   stage: Stage | "closed";
+  // The order's state as saved, sent back with a change so that a pop-up
+  // opened before someone else moved the order can't undo their change.
+  status: string;
+  // The order that replaced this one in an exchange, if any.
+  exchangedWith: string | null;
   // "Dubai · Dubai Marina" and "2 M Black, 1 M White".
   place: string;
   contents: string;
@@ -371,6 +376,7 @@ export function StepsModal({
           startTransition(() => run(data));
         }}
       >
+        <input type="hidden" name="was" value={order.status} />
         <div className="space-y-2.5 p-4 text-sm">
           <div className={row}>
             <input
@@ -495,7 +501,15 @@ export function StepsModal({
 
           {/* How an order ends: delivered ones can come back or be swapped,
               the others can be cancelled. */}
-          {isDelivered ? (
+          {isDelivered && order.exchangedWith ? (
+            <p
+              data-exchanged-note
+              className="border-t border-stone-200 pt-3 text-xs text-stone-600"
+            >
+              This order was exchanged with <b>{order.exchangedWith}</b>. A return or another
+              exchange is made on that order, since the customer now has its pieces.
+            </p>
+          ) : isDelivered ? (
             <div className="grid grid-cols-2 gap-2 border-t border-stone-200 pt-3">
               <button type="button" onClick={() => setView("return")} className="btn-secondary">
                 <Undo2 className="size-4" /> Create Return

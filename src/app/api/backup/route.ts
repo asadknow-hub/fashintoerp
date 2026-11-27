@@ -27,7 +27,7 @@ import { getUser } from "@/lib/auth";
 export async function GET() {
   const user = await getUser();
   if (!user) return new Response("Please sign in.", { status: 401 });
-  if (user.role !== "owner") return new Response("Only owners can do this.", { status: 403 });
+  if (user.role !== "owner") return new Response("Only a System Admin can do this.", { status: 403 });
 
   const [
     business,

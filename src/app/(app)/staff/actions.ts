@@ -74,7 +74,7 @@ export async function updateStaff(
   const active = form.get("active") === "on";
   // You can't lock yourself out: your own role and access stay as they are.
   if (self && (details.role !== "owner" || !active)) {
-    return { error: "You can't remove your own access or owner role." };
+    return { error: "You can't remove your own access or System Admin role." };
   }
 
   const [updated] = await db

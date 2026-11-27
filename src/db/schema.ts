@@ -345,6 +345,10 @@ export const orders = pgTable(
     // Set on an order that replaces another one: the order it is an
     // exchange for.
     exchangeOfId: uuid("exchange_of_id"),
+    // On an exchange: what the customer paid for the goods on the order it
+    // replaces. A return of the exchange gives that back (its own COD is only
+    // the delivery charge).
+    refundBase: money("refund_base"),
     shippingFee: money("shipping_fee").notNull().default("0"),
     discount: money("discount").notNull().default("0"),
     total: money("total").notNull().default("0"),

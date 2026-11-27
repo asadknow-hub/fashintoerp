@@ -71,7 +71,8 @@ export function amount(form: FormData, key: string) {
   const raw = text(form, key);
   if (!raw) return "0";
   const n = Number(raw);
-  return Number.isFinite(n) && n >= 0 ? n.toFixed(2) : null;
+  // Capped well above any real amount, and below what the database can hold.
+  return Number.isFinite(n) && n >= 0 && n <= 99_999_999 ? n.toFixed(2) : null;
 }
 
 export function isUuid(value: string) {

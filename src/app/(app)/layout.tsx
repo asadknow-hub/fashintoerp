@@ -7,6 +7,7 @@ import { Menu } from "@/components/menu";
 import { Crumbs, Nav } from "@/components/nav";
 import { SearchBox } from "@/components/search-box";
 import { Shell } from "@/components/shell";
+import { roleLabel } from "@/components/ui";
 import { SubmitButton } from "@/components/submit-button";
 import { db } from "@/db";
 import { orders, products, variants } from "@/db/schema";
@@ -29,7 +30,7 @@ export default function AppLayout({ children }: LayoutProps<"/">) {
             </span>
           </Link>
           <Suspense>
-            <Nav />
+            <RoleNav />
           </Suspense>
           {/* Shows which version of the app is live, to make support easier. */}
           <p className="mt-auto px-3 pt-3 text-[10px] text-stone-400">
@@ -57,6 +58,12 @@ export default function AppLayout({ children }: LayoutProps<"/">) {
       {children}
     </Shell>
   );
+}
+
+// The menu, with the Staff entry for a System Admin.
+async function RoleNav() {
+  const user = await requireUser();
+  return <Nav staff={user.role === "owner"} />;
 }
 
 async function BusinessName() {
@@ -145,12 +152,20 @@ async function UserMenu() {
           <span className="flex size-8 items-center justify-center rounded-full bg-brand-100 text-xs font-bold text-brand">
             {initials}
           </span>
-          <span className="text-sm font-bold max-sm:hidden">{user.name}</span>
+          <span className="text-left leading-tight max-sm:hidden">
+            <span className="block text-sm font-bold">{user.name}</span>
+            <span data-role className="block text-[11px] text-stone-500">
+              {roleLabel[user.role]}
+            </span>
+          </span>
           <ChevronDown className="size-4 text-stone-500 max-sm:hidden" />
         </span>
       }
     >
-      <p className="border-b border-stone-200 px-3 py-2 text-xs text-stone-500">{user.email}</p>
+      <p className="border-b border-stone-200 px-3 py-2 text-xs text-stone-500">
+        {user.email}
+        <span className="block font-semibold text-stone-700">{roleLabel[user.role]}</span>
+      </p>
       <Link href="/settings" className={item}>
         <Settings className="size-4 text-stone-500" /> Settings
       </Link>

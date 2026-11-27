@@ -135,10 +135,12 @@ export default async function OrdersPage({
           select coalesce(x.tracking_number, '#' || x.number) from orders x
           where x.id = ${orders.exchangeOfId}
         )`,
-        // True when another order (not a cancelled one) was made to replace this one.
-        exchanged: sql<boolean>`exists (
-          select 1 from orders x where x.exchange_of_id = ${orders.id} and x.status <> 'cancelled'
+        // The order (not a cancelled one) that was made to replace this one.
+        exchangedWith: sql<string | null>`(
+          select coalesce(x.tracking_number, '#' || x.number) from orders x
+          where x.exchange_of_id = ${orders.id} and x.status <> 'cancelled' limit 1
         )`,
+        refundBase: orders.refundBase,
         cancelFee: orders.cancelFee,
         createdAt: orders.createdAt,
         customer: customers.name,
@@ -209,6 +211,13 @@ export default async function OrdersPage({
     [...(contents.get(orderId)?.products ?? [])]
       .map(([product, what]) => `${product}: ${what.join(", ")}`)
       .join(" · ");
+  // What the customer paid for the goods: on an exchange, what they paid on
+  // the order it replaces; otherwise the COD, or the value if paid beforehand.
+  const paidOf = (row: (typeof rows)[number]) =>
+    Number(
+      row.refundBase ??
+        (row.payment === "cod" || row.exchangeOfId ? row.codAmount : row.total),
+    );
   const card = (row: (typeof rows)[number]): OrderCard => ({
     id: row.id,
     number: row.number,
@@ -216,10 +225,13 @@ export default async function OrdersPage({
     customer: row.customer,
     phone: row.phone,
     stage: stageOf(row.status),
+    status: row.status,
+    exchangedWith: row.exchangedWith,
     place: [row.city, row.area].filter(Boolean).join(" · "),
     contents: said(row.id),
-    cod: row.payment === "cod" ? formatMoney(row.codAmount, currency) : "Paid",
-    paid: Number(row.payment === "cod" ? row.codAmount : row.total),
+    cod:
+      row.payment === "cod" || row.exchangeOfId ? formatMoney(row.codAmount, currency) : "Paid",
+    paid: paidOf(row),
     exchangeOf: row.exchangeOf,
     company: row.company,
     companyId: row.companyId,
@@ -405,7 +417,7 @@ export default async function OrdersPage({
                       </Link>
                       {row.ref && <CopyButton text={row.ref} label="order number" />}
                       <span className="mt-0.5 flex items-center">
-                        <OrderBadge status={row.status} exchanged={row.exchanged} />
+                        <OrderBadge status={row.status} exchanged={row.exchangedWith !== null} />
                         {row.exchangeOf && <ExchangeInfo of={row.exchangeOf} />}
                       </span>
                     </td>
@@ -487,7 +499,9 @@ export default async function OrdersPage({
                       )}
                     </td>
                     <td className={cell + " text-right font-bold whitespace-nowrap tabular-nums"}>
-                      {row.payment === "cod" ? formatMoney(row.codAmount, currency) : "Paid"}
+                      {row.payment === "cod" || row.exchangeOfId
+                        ? formatMoney(row.codAmount, currency)
+                        : "Paid"}
                     </td>
                     <td className={cell}>
                       {shut ? (
@@ -510,11 +524,7 @@ export default async function OrdersPage({
                         >
                           Refund{" "}
                           {formatMoney(
-                            Math.max(
-                              Number(row.payment === "cod" ? row.codAmount : row.total) -
-                                Number(row.returnFee ?? 0),
-                              0,
-                            ),
+                            Math.max(paidOf(row) - Number(row.returnFee ?? 0), 0),
                             currency,
                           )}
                           {row.refundSentAt ? " sent" : " to send"}

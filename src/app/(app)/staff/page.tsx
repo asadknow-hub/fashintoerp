@@ -1,6 +1,6 @@
 import { asc } from "drizzle-orm";
 import Link from "next/link";
-import { Badge, PageHeader } from "@/components/ui";
+import { Badge, PageHeader, roleLabel } from "@/components/ui";
 import { db } from "@/db";
 import { users } from "@/db/schema";
 import { requireOwner } from "@/lib/auth";
@@ -55,7 +55,7 @@ export default async function StaffPage() {
                 <td className="td text-stone-600">{person.email}</td>
                 <td className="td">
                   <Badge tone={person.role === "owner" ? "blue" : "gray"}>
-                    {person.role === "owner" ? "Owner" : "Staff"}
+                    {roleLabel[person.role]}
                   </Badge>
                 </td>
                 <td className="td">

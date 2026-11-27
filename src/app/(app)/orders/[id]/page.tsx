@@ -75,7 +75,7 @@ const dayIn = (date: Date, timezone: string) =>
   }).format(date);
 
 export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
-  await requireUser();
+  const user = await requireUser();
   const { id } = await params;
   if (!isUuid(id)) notFound();
 
@@ -111,6 +111,10 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
         .from(orders)
         .where(eq(orders.exchangeOfId, order.id)),
     ]);
+  // Orders made to replace this one that were not cancelled: only those
+  // count as an exchange having happened.
+  const liveSwaps = replacedBy.filter((next) => next.status !== "cancelled");
+  const swappedWith = liveSwaps.at(0);
   // On an exchange: the pieces of the first order, which come back.
   const oldItems = replaces ? await itemsOf(replaces.id) : [];
 
@@ -126,12 +130,17 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
   const subtotal = items.reduce((sum, item) => sum + item.quantity * Number(item.unitPrice), 0);
   const delivery = Number(order.shippingFee);
   const cod = Number(order.codAmount);
-  const prepaid = order.payment !== "cod";
-  // What came off the listed prices to arrive at the COD.
-  const discount = prepaid ? 0 : subtotal + delivery - cod;
-  // What the customer paid for the order: its COD, or its value when it was
-  // paid beforehand.
-  const paid = prepaid ? Number(order.total) : cod;
+  // Paid beforehand means nothing is collected on delivery. An exchange is
+  // never that: its goods were paid for on the order it replaces.
+  const prepaid = order.payment !== "cod" && order.exchangeOfId === null;
+  // What came off the listed prices to arrive at what the customer pays.
+  const discount = subtotal + delivery - (prepaid ? Number(order.total) : cod);
+  // The money that comes in for this order itself: its COD, or its value
+  // when it was paid beforehand.
+  const paidHere = prepaid ? Number(order.total) : cod;
+  // What the customer paid for the goods: on an exchange, what they paid on
+  // the order it replaces. This is what a return gives back.
+  const paid = order.refundBase === null ? paidHere : Number(order.refundBase);
 
   // The delivery company's side: what it collected and what it keeps.
   const wasDelivered =
@@ -157,7 +166,8 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
   const refund = Math.max(paid - covered, 0);
   const firstTrip = Number(order.deliveryCharge ?? 0);
   const tripBack = Number(order.returnCharge ?? 0);
-  const result = -firstTrip - tripBack + (paid - refund);
+  // The same sum Reports makes for this order.
+  const result = paidHere - firstTrip - tripBack - refund;
 
   /* ---------- Steps ---------- */
 
@@ -178,6 +188,8 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
     customer: customer.name,
     phone: customer.phone,
     stage,
+    status: order.status,
+    exchangedWith: swappedWith ? orderName(swappedWith.ref, swappedWith.number) : null,
     place: [order.city, order.area].filter(Boolean).join(" · "),
     contents: items.map((item) => `${item.quantity} ${what(item)}`).join(", "),
     cod: prepaid ? "Paid" : money(cod),
@@ -197,10 +209,10 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
       ? { label: "Returned", note: when(order.returnedAt) ?? "", tone: "rose" as const, icon: Undo2 }
       : order.status === "cancelled"
         ? { label: "Cancelled", note: when(order.cancelledAt) ?? "", tone: "rose" as const, icon: Ban }
-        : replacedBy.length > 0
+        : liveSwaps.length > 0
           ? {
               label: "Exchanged",
-              note: `with ${replacedBy.map((next) => orderName(next.ref, next.number)).join(", ")}`,
+              note: `with ${liveSwaps.map((next) => orderName(next.ref, next.number)).join(", ")}`,
               tone: "brand" as const,
               icon: Repeat,
             }
@@ -227,7 +239,7 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
   const ownComeBack =
     order.status === "returned" ||
     (order.status === "cancelled" && order.dispatchedAt !== null) ||
-    replacedBy.length > 0;
+    swappedWith !== undefined;
 
   /* ---------- What happened, in order ---------- */
 
@@ -268,7 +280,7 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
             <span className="flex items-center text-base">
               <OrderBadge
                 status={order.status}
-                exchanged={replacedBy.some((next) => next.status !== "cancelled")}
+                exchanged={swappedWith !== undefined}
               />
               {replaces && <ExchangeInfo of={orderName(replaces.ref, replaces.number)} />}
             </span>
@@ -279,6 +291,28 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
               orderId={order.id}
               name={name}
               date={dayIn(order.createdAt, timezone)}
+              admin={user.role === "owner"}
+              details={{
+                name: customer.name,
+                phone: customer.phone ?? "",
+                phone2: order.phone2 ?? "",
+                country: order.country ?? "",
+                city: order.city ?? "",
+                area: order.area ?? "",
+                street: order.street ?? "",
+                cod: cod.toFixed(2),
+                shippingFee: delivery.toFixed(2),
+                instruction: order.instruction ?? "",
+              }}
+              // Pieces a delete could put back: those not already back in
+              // stock and not thrown away.
+              piecesOut={items
+                .filter((item) => item.backState !== "stock" && item.backState !== "discarded")
+                .reduce((sum, item) => sum + item.quantity, 0)}
+              // Sensible while the parcel has not reached a customer.
+              restockByDefault={
+                stage === "new" || stage === "portal" || stage === "dispatched"
+              }
             />
           </p>
         </div>
@@ -297,18 +331,25 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
           . The customer pays the delivery charge as its COD; that stays with the delivery company.
         </p>
       )}
-      {replacedBy.length > 0 && (
+      {liveSwaps.length > 0 && (
         <p
           data-order-exchange
           className="card flex flex-wrap items-center gap-2 border-violet-200 bg-violet-50 px-3 py-2 text-sm text-violet-900"
         >
           <Repeat className="size-4 shrink-0" />
           Exchanged with{" "}
-          {replacedBy.map((next) => (
+          {liveSwaps.map((next) => (
             <Link key={next.id} href={`/orders/${next.id}`} className="font-semibold underline">
               Order {orderName(next.ref, next.number)}
             </Link>
           ))}
+        </p>
+      )}
+
+      {order.status === "cancelled" && prepaid && Number(order.total) > 0 && (
+        <p className="card border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          This order was paid beforehand and then cancelled: send {money(order.total)} back to the
+          customer.
         </p>
       )}
 
@@ -590,10 +631,18 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
                 <dd>{money(delivery)}</dd>
               </div>
               {prepaid ? (
-                <div className="flex justify-between py-2">
-                  <dt>Paid before delivery</dt>
-                  <dd className="font-semibold text-emerald-700">− {money(subtotal + delivery)}</dd>
-                </div>
+                <>
+                  {discount > 0.004 && (
+                    <div className="flex justify-between border-b border-stone-100 py-2">
+                      <dt>Discount</dt>
+                      <dd className="font-semibold text-emerald-700">− {money(discount)}</dd>
+                    </div>
+                  )}
+                  <div className="flex justify-between py-2">
+                    <dt>Paid before delivery</dt>
+                    <dd className="font-semibold text-emerald-700">− {money(order.total)}</dd>
+                  </div>
+                </>
               ) : replaces && discount > 0.004 ? (
                 // On an exchange the pieces were paid for on the first order;
                 // only the delivery charge is collected this time.
@@ -682,7 +731,14 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
               <dl className="px-4 pb-4 text-sm tabular-nums">
                 <p className="pb-1 text-xs font-bold text-stone-500 uppercase">Customer refund</p>
                 <div className="flex justify-between border-b border-stone-100 py-2">
-                  <dt>Customer paid</dt>
+                  <dt>
+                    Customer paid
+                    {replaces && order.refundBase !== null && (
+                      <span className="block text-xs text-stone-500">
+                        on Order {orderName(replaces.ref, replaces.number)}
+                      </span>
+                    )}
+                  </dt>
                   <dd>{money(paid)}</dd>
                 </div>
                 <div className="flex justify-between border-b border-stone-100 py-2">
@@ -712,6 +768,10 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
                   What this order came to
                 </p>
                 <div className="flex justify-between border-b border-stone-100 py-2">
+                  <dt>{prepaid ? "Paid before delivery" : "COD collected"}</dt>
+                  <dd>+ {money(paidHere)}</dd>
+                </div>
+                <div className="flex justify-between border-b border-stone-100 py-2">
                   <dt>Delivery charge (to the customer)</dt>
                   <dd>− {money(firstTrip)}</dd>
                 </div>
@@ -720,8 +780,8 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
                   <dd>− {money(tripBack)}</dd>
                 </div>
                 <div className="flex justify-between border-b border-stone-100 py-2">
-                  <dt>Covered by the customer</dt>
-                  <dd>+ {money(paid - refund)}</dd>
+                  <dt>Refund to the customer</dt>
+                  <dd>− {money(refund)}</dd>
                 </div>
                 <div
                   data-order-result
@@ -735,6 +795,8 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
                 </div>
                 <p className="mt-2 text-xs text-stone-500">
                   This is the figure Reports counts for this order.
+                  {replaces &&
+                    ` The goods were paid for on Order ${orderName(replaces.ref, replaces.number)}, which keeps that money.`}
                 </p>
               </dl>
             </section>

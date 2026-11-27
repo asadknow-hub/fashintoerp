@@ -12,9 +12,10 @@ import {
   Undo2,
 } from "lucide-react";
 import Link from "next/link";
-import { useActionState, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { useActionState, useEffect, useRef, useState, useTransition } from "react";
 import { Modal } from "@/components/modal";
-import { editOrder, markRefund, settleItem } from "../actions";
+import { deleteOrder, editOrder, markRefund, settleItem } from "../actions";
 import { type ActionView, type Company, type OrderCard, StepsModal } from "../order-actions";
 
 // The card at the top right of an order: what can be done with it now.
@@ -32,6 +33,8 @@ export function OutcomeActions({
   const [view, setView] = useState<ActionView | null>(null);
   const delivered = order.stage === "delivered";
   if (order.stage === "closed") return null;
+  // Once exchanged, what comes next happens on the order that replaced it.
+  const swapped = delivered ? order.exchangedWith : null;
 
   return (
     <section
@@ -53,7 +56,7 @@ export function OutcomeActions({
           </p>
         </div>
       </div>
-      <div className="mt-3 grid grid-cols-2 gap-2">
+      <div className={"mt-3 grid grid-cols-2 gap-2" + (swapped ? " hidden" : "")}>
         {delivered ? (
           <>
             <button type="button" onClick={() => setView("return")} className="btn justify-center">
@@ -83,9 +86,11 @@ export function OutcomeActions({
       </div>
       <p className="mt-3 flex items-start gap-2 text-xs text-stone-600">
         <Info className="mt-0.5 size-3.5 shrink-0" />
-        {delivered
-          ? "Clicking one of these starts the next workflow step in the roadmap (Return / Exchange)."
-          : "A return or an exchange can be started once the order is delivered."}
+        {swapped
+          ? `This order was exchanged with ${swapped}. A return or another exchange is made on that order, since the customer now has its pieces.`
+          : delivered
+            ? "Clicking one of these starts the next workflow step in the roadmap (Return / Exchange)."
+            : "A return or an exchange can be started once the order is delivered."}
       </p>
       {delivered && (
         <button
@@ -241,42 +246,139 @@ export function ItemsBack({
   );
 }
 
-// The pencil beside the order's date: change the date or the FO number.
+export type OrderDetails = {
+  name: string;
+  phone: string;
+  phone2: string;
+  country: string;
+  city: string;
+  area: string;
+  street: string;
+  cod: string;
+  shippingFee: string;
+  instruction: string;
+};
+
+// The pencil beside the order's date. Anyone can correct the date and the FO
+// number; a System Admin can correct every detail of the order, and delete
+// the order altogether.
 export function EditOrder({
   orderId,
   name,
   date,
+  admin,
+  details,
+  piecesOut,
+  restockByDefault,
 }: {
   orderId: string;
   name: string;
   // As 2026-11-27.
   date: string;
+  admin: boolean;
+  details: OrderDetails;
+  // How many pieces a delete could put back into stock, and whether doing so
+  // is the sensible default (it is not when the customer has them).
+  piecesOut: number;
+  restockByDefault: boolean;
 }) {
+  const router = useRouter();
   const [open, setOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [result, save, saving] = useActionState(editOrder.bind(null, orderId), null);
+  const [gone, remove, removing] = useActionState(deleteOrder.bind(null, orderId), null);
   const [seen, setSeen] = useState(result);
   if (result !== seen) {
     setSeen(result);
     if (result?.ok) setOpen(false);
   }
+  // Deleted: back to the list.
+  const left = useRef(false);
+  useEffect(() => {
+    if (gone?.go && !left.current) {
+      left.current = true;
+      router.push(gone.go);
+    }
+  }, [gone, router]);
+
+  const close = () => {
+    setOpen(false);
+    setDeleting(false);
+  };
+  const field = (label: string, input: React.ReactNode, wide = false) => (
+    <label className={"block" + (wide ? " sm:col-span-2" : "")}>
+      <span className="label">{label}</span>
+      {input}
+    </label>
+  );
 
   return (
     <>
       <button
         type="button"
         onClick={() => setOpen(true)}
-        aria-label="Edit the date or FO number"
-        title="Edit the date or FO number"
+        aria-label={admin ? "Edit this order" : "Edit the date or FO number"}
+        title={admin ? "Edit this order" : "Edit the date or FO number"}
         className="ml-1.5 inline-flex size-6 cursor-pointer items-center justify-center rounded text-stone-400 hover:bg-brand-100 hover:text-brand"
       >
         <Pencil className="size-3.5" />
       </button>
-      {open && (
-        <Modal title={`Edit Order ${name}`} onClose={() => setOpen(false)}>
+      {open && deleting && (
+        <Modal title={`Delete Order ${name}?`} onClose={close}>
+          <form action={remove} data-delete-order>
+            <div className="space-y-3 p-4 text-sm">
+              <p className="rounded-lg bg-rose-50 px-3 py-2 text-rose-800">
+                This removes the order for good, with everything recorded on it. It can&apos;t be
+                undone.
+              </p>
+              {piecesOut > 0 ? (
+                <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-stone-200 px-3 py-2.5">
+                  <input
+                    type="checkbox"
+                    name="restock"
+                    defaultChecked={restockByDefault}
+                    className="mt-0.5 size-4 accent-[#5b4fd9]"
+                  />
+                  <span>
+                    <span className="font-semibold">
+                      Put its {piecesOut} {piecesOut === 1 ? "piece" : "pieces"} back into stock
+                    </span>
+                    <span className="block text-xs text-stone-500">
+                      Tick this for an order entered by mistake. Leave it unticked if the customer
+                      really has the pieces.
+                    </span>
+                  </span>
+                </label>
+              ) : (
+                <p className="text-stone-600">Stock will not change: nothing of this order is out.</p>
+              )}
+              {gone?.error && (
+                <p role="alert" className="font-semibold text-rose-700">
+                  {gone.error}
+                </p>
+              )}
+            </div>
+            <footer className="flex justify-end gap-2 border-t border-stone-200 bg-stone-50 px-4 py-3">
+              <button type="button" onClick={() => setDeleting(false)} className="btn-secondary">
+                Back
+              </button>
+              <button
+                type="submit"
+                disabled={removing || !!gone?.go}
+                className="btn bg-rose-600 px-5 hover:bg-rose-700"
+              >
+                <Trash2 className="size-4" /> {removing || gone?.go ? "Deleting…" : "Delete Order"}
+              </button>
+            </footer>
+          </form>
+        </Modal>
+      )}
+      {open && !deleting && (
+        <Modal title={`Edit Order ${name}`} onClose={close} wide={admin}>
           <form action={save} data-edit-order>
-            <div className="grid gap-3 p-4 sm:grid-cols-2">
-              <label className="block">
-                <span className="label">FO number</span>
+            <div className={"grid gap-3 p-4 " + (admin ? "sm:grid-cols-4" : "sm:grid-cols-2")}>
+              {field(
+                "FO number",
                 <input
                   name="ref"
                   required
@@ -284,30 +386,82 @@ export function EditOrder({
                   defaultValue={name.startsWith("#") ? "" : name}
                   placeholder="FO001"
                   className="input font-semibold uppercase"
-                />
-              </label>
-              <label className="block">
-                <span className="label">Order date</span>
-                <input
-                  type="date"
-                  name="orderDate"
-                  defaultValue={date}
-                  className="input"
-                />
-              </label>
+                />,
+              )}
+              {field(
+                "Order date",
+                <input type="date" name="orderDate" defaultValue={date} className="input" />,
+              )}
+              {admin && (
+                <>
+                  {field(
+                    "COD (AED)",
+                    <input name="cod" inputMode="decimal" defaultValue={details.cod} className="input tabular-nums" />,
+                  )}
+                  {field(
+                    "Delivery fee (AED)",
+                    <input
+                      name="shippingFee"
+                      inputMode="decimal"
+                      defaultValue={details.shippingFee}
+                      className="input tabular-nums"
+                    />,
+                  )}
+                  {field(
+                    "Receiver name",
+                    <input name="name" defaultValue={details.name} className="input" />,
+                    true,
+                  )}
+                  {field(
+                    "Mobile 1",
+                    <input name="phone" inputMode="tel" defaultValue={details.phone} className="input" />,
+                  )}
+                  {field(
+                    "Mobile 2",
+                    <input name="phone2" inputMode="tel" defaultValue={details.phone2} className="input" />,
+                  )}
+                  {field("Country", <input name="country" defaultValue={details.country} className="input" />)}
+                  {field("City", <input name="city" defaultValue={details.city} className="input" />)}
+                  {field("Area", <input name="area" defaultValue={details.area} className="input" />, true)}
+                  {field(
+                    "Street address",
+                    <input name="street" defaultValue={details.street} className="input" />,
+                    true,
+                  )}
+                  {field(
+                    "Instruction",
+                    <input name="instruction" defaultValue={details.instruction} className="input" />,
+                    true,
+                  )}
+                </>
+              )}
               {result?.error && (
-                <p role="alert" className="text-sm font-semibold text-rose-700 sm:col-span-2">
+                <p
+                  role="alert"
+                  className={"text-sm font-semibold text-rose-700 " + (admin ? "sm:col-span-4" : "sm:col-span-2")}
+                >
                   {result.error}
                 </p>
               )}
             </div>
-            <footer className="flex justify-end gap-2 border-t border-stone-200 bg-stone-50 px-4 py-3">
-              <button type="button" onClick={() => setOpen(false)} className="btn-secondary">
-                Close
-              </button>
-              <button type="submit" disabled={saving} className="btn px-5">
-                {saving ? "Saving…" : "Save"}
-              </button>
+            <footer className="flex flex-wrap items-center gap-2 border-t border-stone-200 bg-stone-50 px-4 py-3">
+              {admin && (
+                <button
+                  type="button"
+                  onClick={() => setDeleting(true)}
+                  className="btn-secondary text-rose-700"
+                >
+                  <Trash2 className="size-4" /> Delete Order
+                </button>
+              )}
+              <span className="ml-auto flex gap-2">
+                <button type="button" onClick={close} className="btn-secondary">
+                  Close
+                </button>
+                <button type="submit" disabled={saving} className="btn px-5">
+                  {saving ? "Saving…" : "Save"}
+                </button>
+              </span>
             </footer>
           </form>
         </Modal>

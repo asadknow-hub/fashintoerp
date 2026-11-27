@@ -3,7 +3,9 @@ import { orders } from "@/db/schema";
 
 // What an order brings in: the cash collected on delivery, or, for an order
 // that was paid beforehand, the value of its items and delivery.
-export const orderAmount = sql<string>`case when ${orders.payment} = 'cod' then ${orders.codAmount} else ${orders.total} end`;
+// (An exchange always counts by its COD, even when that is zero: nothing was
+// paid beforehand, the goods were paid for on the order it replaces.)
+export const orderAmount = sql<string>`case when ${orders.payment} = 'cod' or ${orders.exchangeOfId} is not null then ${orders.codAmount} else ${orders.total} end`;
 
 // One row per line of an order, with `share`: that line's part of what the
 // order brought in. Revenue is the money the customer pays (the COD), not
@@ -17,7 +19,7 @@ export const itemShares = sql`
     o.status,
     o.created_at,
     o.exchange_of_id,
-    (case when o.payment = 'cod' then o.cod_amount else o.total end)
+      (case when o.payment = 'cod' or o.exchange_of_id is not null then o.cod_amount else o.total end)
     * (case
         when sum(i.quantity * i.unit_price - i.discount) over w > 0
           then (i.quantity * i.unit_price - i.discount)
@@ -49,10 +51,12 @@ export const courierCharges = sql<string>`(
 )`;
 
 // What goes back to the customer by bank transfer on a return: what they
-// paid, less the part of the delivery cost they agreed to cover.
+// paid for the goods (on an exchange, what they paid on the order it
+// replaced), less the part of the delivery cost they agreed to cover.
 export const customerRefund = sql<string>`(
   case when ${orders.status} = 'returned' and ${orders.deliveredAt} is not null
-    then greatest(${orderAmount} - coalesce(${orders.returnFee}, 0), 0) else 0 end
+    then greatest(coalesce(${orders.refundBase}, ${orderAmount}) - coalesce(${orders.returnFee}, 0), 0)
+    else 0 end
 )`;
 
 // What an order earned in the end: the money that came in for it once it was

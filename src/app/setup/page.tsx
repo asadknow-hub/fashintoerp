@@ -16,7 +16,7 @@ export default function SetupPage() {
           Welcome — let&apos;s set up your business
         </h1>
         <p className="mb-6 text-sm text-stone-500">
-          This creates the owner account. You can add your team later.
+          This creates your System Admin account. You can add your team later.
         </p>
         <Suspense>
           <Gate />

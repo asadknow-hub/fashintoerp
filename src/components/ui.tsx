@@ -162,6 +162,9 @@ export function Empty({
   );
 }
 
+// What each kind of account is called. An "owner" runs the whole system.
+export const roleLabel = { owner: "System Admin", staff: "Staff" } as const;
+
 // How each step of an order is called on screen.
 export const orderStatusLabel = {
   new: "New",

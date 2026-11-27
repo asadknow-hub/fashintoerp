@@ -37,7 +37,7 @@ export default function RecoverPage() {
           </Field>
         </ActionForm>
         <p className="mt-3 text-xs text-stone-500">
-          No code? An owner can set a new password for you on the Staff page.
+          No code? A System Admin can set a new password for you on the Staff page.
         </p>
         <Link href="/login" className="mt-2 inline-block text-sm text-stone-600 hover:underline">
           ← Back to sign in
