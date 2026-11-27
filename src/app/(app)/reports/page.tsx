@@ -1,5 +1,5 @@
-import { and, desc, eq, lte, notInArray, sql } from "drizzle-orm";
-import { Coins, Package, ShoppingCart, TrendingUp, Truck } from "lucide-react";
+import { and, eq, lte, notInArray, sql } from "drizzle-orm";
+import { Coins, Package, ShoppingCart, TrendingUp, Truck, Wallet } from "lucide-react";
 import Link from "next/link";
 import { Block, PageHeader } from "@/components/ui";
 import { db } from "@/db";
@@ -13,7 +13,7 @@ import {
 } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
 import { formatMoney } from "@/lib/format";
-import { orderAmount } from "@/lib/order-amount";
+import { itemShares, orderAmount } from "@/lib/order-amount";
 import { getPrefs } from "@/lib/settings";
 
 const periods = [
@@ -78,21 +78,17 @@ export default async function ReportsPage({ searchParams }: PageProps<"/reports"
       .from(variants)
       .innerJoin(products, eq(products.id, variants.productId))
       .where(and(eq(products.archived, false), lte(variants.stock, variants.lowStockAt))),
-    db
-      .select({
-        id: products.id,
-        name: products.name,
-        units: sql<number>`sum(${orderItems.quantity})::int`,
-        revenue: sql<string>`sum(${orderItems.quantity} * ${orderItems.unitPrice} - ${orderItems.discount})`,
-      })
-      .from(orderItems)
-      .innerJoin(orders, eq(orders.id, orderItems.orderId))
-      .innerJoin(variants, eq(variants.id, orderItems.variantId))
-      .innerJoin(products, eq(products.id, variants.productId))
-      .where(counted)
-      .groupBy(products.id)
-      .orderBy(desc(sql`sum(${orderItems.quantity})`))
-      .limit(10),
+    // What each product brought in: its share of what customers paid (COD).
+    db.execute<{ id: string; name: string; units: number; revenue: string }>(sql`
+      select p.id, p.name, sum(s.quantity)::int as units, coalesce(sum(s.share), 0) as revenue
+      from (${itemShares}) s
+      join variants v on v.id = s.variant_id
+      join products p on p.id = v.product_id
+      where s.status not in ('cancelled', 'returned')
+        ${period.days === null ? sql`` : sql`and s.created_at >= now() - make_interval(days => ${period.days})`}
+      group by p.id, p.name
+      order by sum(s.quantity) desc, p.name
+      limit 10`),
     db
       .select({
         company: sql<string>`coalesce(${deliveryCompanies.name}, 'No company chosen')`,
@@ -119,11 +115,20 @@ export default async function ReportsPage({ searchParams }: PageProps<"/reports"
     {
       label: "Sales",
       value: formatMoney(sales.revenue, currency),
-      note: `${sales.orders} ${sales.orders === 1 ? "order" : "orders"}`,
+      note: `${sales.orders} ${sales.orders === 1 ? "order" : "orders"} · what customers pay (COD)`,
       icon: TrendingUp,
       tone: "bg-brand-50 border-brand-100",
       iconTone: "bg-brand-100 text-brand",
       href: "/orders",
+    },
+    {
+      label: "Income",
+      value: formatMoney(payoutTotal.cod - payoutTotal.charges, currency),
+      note: `${payoutTotal.orders} delivered · COD less delivery charges`,
+      icon: Wallet,
+      tone: "bg-emerald-50 border-emerald-100",
+      iconTone: "bg-emerald-100 text-emerald-600",
+      href: "/orders?status=delivered",
     },
     {
       label: "Units Sold",
@@ -139,15 +144,6 @@ export default async function ReportsPage({ searchParams }: PageProps<"/reports"
       value: `${stock.units} units`,
       note: `${low.items} low or out`,
       icon: Package,
-      tone: "bg-emerald-50 border-emerald-100",
-      iconTone: "bg-emerald-100 text-emerald-600",
-      href: "/inventory",
-    },
-    {
-      label: "Inventory Value (at cost)",
-      value: formatMoney(stock.cost, currency),
-      note: `${formatMoney(stock.selling, currency)} at selling price`,
-      icon: Coins,
       tone: "bg-brand-50 border-brand-100",
       iconTone: "bg-brand-100 text-brand",
       href: "/inventory",
@@ -204,7 +200,7 @@ export default async function ReportsPage({ searchParams }: PageProps<"/reports"
                 <tr>
                   <th className="th rounded-l-lg">Product</th>
                   <th className="th text-center">Units Sold</th>
-                  <th className="th rounded-r-lg text-right">Revenue</th>
+                  <th className="th rounded-r-lg text-right">Revenue (COD)</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-stone-100">

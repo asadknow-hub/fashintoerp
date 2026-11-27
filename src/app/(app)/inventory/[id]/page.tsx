@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, isNotNull, notInArray, sql } from "drizzle-orm";
+import { asc, desc, eq, isNotNull, sql } from "drizzle-orm";
 import {
   Box,
   Calculator,
@@ -15,8 +15,6 @@ import { ActionForm } from "@/components/action-form";
 import { Block, Field } from "@/components/ui";
 import { db } from "@/db";
 import {
-  orderItems,
-  orders,
   productMedia,
   products,
   stockCountLines,
@@ -30,6 +28,7 @@ import {
 import { requireUser } from "@/lib/auth";
 import { formatDate, formatDateTime, formatMoney, isUuid, sortSizes, variantLabel } from "@/lib/format";
 import { mediaMode, mediaOffReason } from "@/lib/media";
+import { itemShares } from "@/lib/order-amount";
 import { getPrefs } from "@/lib/settings";
 import { addVariants, updateVariants } from "../actions";
 import { ProductTop } from "./product-top";
@@ -160,17 +159,13 @@ export default async function ProductPage({ params }: PageProps<"/inventory/[id]
       .innerJoin(variants, eq(variants.id, stockMovements.variantId))
       .where(eq(variants.productId, id))
       .groupBy(stockMovements.reason),
-    // Money taken for this product on orders that were not cancelled or returned.
-    db
-      .select({
-        revenue: sql<string>`coalesce(sum(${orderItems.quantity} * ${orderItems.unitPrice} - ${orderItems.discount}), 0)`,
-      })
-      .from(orderItems)
-      .innerJoin(orders, eq(orders.id, orderItems.orderId))
-      .innerJoin(variants, eq(variants.id, orderItems.variantId))
-      .where(
-        and(eq(variants.productId, id), notInArray(orders.status, ["cancelled", "returned"])),
-      ),
+    // Money this product brought in, on orders that were not cancelled or
+    // returned: its share of what the customers paid (the COD).
+    db.execute<{ revenue: string }>(sql`
+      select coalesce(sum(s.share), 0) as revenue
+      from (${itemShares}) s
+      join variants v on v.id = s.variant_id
+      where v.product_id = ${id} and s.status not in ('cancelled', 'returned')`),
     db
       .selectDistinct({ category: products.category })
       .from(products)
