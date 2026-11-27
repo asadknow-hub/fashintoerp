@@ -9,6 +9,7 @@ import {
   products,
   stockCountLines,
   stockCounts,
+  stockPurchases,
   variants,
 } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
@@ -63,6 +64,8 @@ export type NewProduct = {
   price: string;
   cost: string;
   lowStockAt: string;
+  // What all of the opening stock was bought for, if known.
+  totalPaid: string;
   // One entry per size and color combination, with its opening stock.
   variants: { size: string | null; color: string | null; stock: number }[];
   media: {
@@ -97,12 +100,16 @@ export async function createProduct(
   const user = await requireUser();
   const name = typeof input?.name === "string" ? input.name.trim().slice(0, 120) : "";
   const price = money(input?.price);
-  const cost = money(input?.cost);
+  let cost = money(input?.cost);
+  const totalPaid = String(input?.totalPaid ?? "").trim() === "" ? null : money(input.totalPaid);
   const lowRaw = String(input?.lowStockAt ?? "").trim();
   const lowStockAt = lowRaw === "" ? 5 : Number(lowRaw);
 
   if (!name) return { error: "Give the product a name." };
   if (price === null || cost === null) return { error: "Prices must be numbers." };
+  if (String(input?.totalPaid ?? "").trim() !== "" && totalPaid === null) {
+    return { error: "Total paid must be a number." };
+  }
   if (!Number.isInteger(lowStockAt) || lowStockAt < 0) {
     return { error: "Low stock alert must be a whole number, 0 or more." };
   }
@@ -123,6 +130,13 @@ export async function createProduct(
   }
   if (combos.length === 0) combos.push({ size: null, color: null, stock: 0 });
   if (combos.length > 200) return { error: "That is too many sizes × colors." };
+
+  const pieces = combos.reduce((sum, combo) => sum + combo.stock, 0);
+  if (totalPaid !== null && pieces === 0) {
+    return { error: "Enter the stock before the total paid for it." };
+  }
+  // With only a total given, the cost of one piece is worked out from it.
+  if (totalPaid !== null && Number(cost) === 0) cost = (Number(totalPaid) / pieces).toFixed(2);
 
   const media = Array.isArray(input?.media) ? input.media.slice(0, 40) : [];
   for (const item of media) {
@@ -172,6 +186,15 @@ export async function createProduct(
         change: row.stock,
         reason: "opening",
         userId: user.id,
+      });
+    }
+    if (pieces > 0) {
+      await tx.insert(stockPurchases).values({
+        productId: product.id,
+        units: pieces,
+        totalCost: totalPaid,
+        note: "Opening stock",
+        createdBy: user.id,
       });
     }
     if (media.length) {
@@ -380,18 +403,25 @@ export async function adjustStockGrid(
   form: FormData,
 ): Promise<ActionState> {
   const user = await requireUser();
-  const kind = adjustments[text(form, "kind") as keyof typeof adjustments];
+  const kindName = text(form, "kind");
+  const kind = adjustments[kindName as keyof typeof adjustments];
   if (!kind) return { error: "Choose what happened." };
   const note = optional(form, "note");
+  // Only asked for when stock is received: what the whole delivery cost.
+  const paidTyped = kindName === "received" ? text(form, "totalPaid") : "";
+  const totalPaid = paidTyped === "" ? null : amount(form, "totalPaid");
+  if (paidTyped !== "" && totalPaid === null) return { error: "Total paid must be a number." };
 
   try {
     const changed = await db.transaction(async (tx) => {
       const rows = await tx
-        .select({ id: variants.id })
+        .select({ id: variants.id, cost: variants.cost })
         .from(variants)
         .where(eq(variants.productId, productId))
         .for("update");
       let count = 0;
+      let pieces = 0;
+      const touched: typeof rows = [];
       for (const row of rows) {
         if (text(form, `qty:${row.id}`) === "") continue;
         const quantity = wholeNumber(form, `qty:${row.id}`);
@@ -405,6 +435,26 @@ export async function adjustStockGrid(
           userId: user.id,
         });
         count++;
+        pieces += quantity;
+        touched.push(row);
+      }
+      if (kindName === "received" && pieces > 0) {
+        await tx.insert(stockPurchases).values({
+          productId,
+          units: pieces,
+          totalCost: totalPaid,
+          note: note ?? "Stock received",
+          createdBy: user.id,
+        });
+        // Items that had no cost yet take theirs from this delivery.
+        if (totalPaid !== null) {
+          const each = (Number(totalPaid) / pieces).toFixed(2);
+          for (const row of touched) {
+            if (Number(row.cost) === 0) {
+              await tx.update(variants).set({ cost: each }).where(eq(variants.id, row.id));
+            }
+          }
+        }
       }
       return count;
     });
@@ -415,6 +465,56 @@ export async function adjustStockGrid(
   }
   refresh();
   return { ok: "Stock updated." };
+}
+
+/* ---------- What stock was bought for ---------- */
+
+function readPurchase(form: FormData) {
+  const units = wholeNumber(form, "units");
+  const paid = text(form, "totalPaid");
+  const totalCost = paid === "" ? null : amount(form, "totalPaid");
+  if (!(units >= 1) || units > 10_000_000) return { error: "Pieces must be a whole number, 1 or more." };
+  if (paid !== "" && totalCost === null) return { error: "Total paid must be a number." };
+  return { units, totalCost, note: optional(form, "note") };
+}
+
+// Records what some stock cost, for stock that is already in the system.
+// It is a money record only: stock is not changed.
+export async function addPurchase(
+  productId: string,
+  _state: ActionState,
+  form: FormData,
+): Promise<ActionState> {
+  const user = await requireUser();
+  if (!isUuid(productId)) return { error: "Product not found." };
+  const values = readPurchase(form);
+  if ("error" in values) return { error: values.error };
+  if (values.totalCost === null) return { error: "Enter the total paid." };
+  await db.insert(stockPurchases).values({ productId, ...values, createdBy: user.id });
+  refresh();
+  return { ok: "Saved." };
+}
+
+export async function updatePurchase(
+  purchaseId: string,
+  _state: ActionState,
+  form: FormData,
+): Promise<ActionState> {
+  await requireUser();
+  if (!isUuid(purchaseId)) return { error: "That record no longer exists." };
+  const values = readPurchase(form);
+  if ("error" in values) return { error: values.error };
+  await db.update(stockPurchases).set(values).where(eq(stockPurchases.id, purchaseId));
+  refresh();
+  return { ok: "Saved." };
+}
+
+export async function deletePurchase(purchaseId: string): Promise<ActionState> {
+  await requireUser();
+  if (!isUuid(String(purchaseId))) return { error: "That record no longer exists." };
+  await db.delete(stockPurchases).where(eq(stockPurchases.id, purchaseId));
+  refresh();
+  return null;
 }
 
 /* ---------- Fresh counts (snapshots) ---------- */

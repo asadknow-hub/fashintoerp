@@ -43,6 +43,13 @@
       "when": 1795719430465,
       "tag": "0005_stock_counts",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1795775670227,
+      "tag": "0006_stock_purchases",
+      "breakpoints": true
     }
   ]
 }

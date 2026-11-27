@@ -14,6 +14,7 @@ import {
   stockCountLines,
   stockCounts,
   stockMovements,
+  stockPurchases,
   users,
   variants,
 } from "@/db/schema";
@@ -42,6 +43,7 @@ export async function GET() {
     autoReplyRows,
     countRows,
     countLineRows,
+    purchaseRows,
   ] = await Promise.all([
     db.select().from(settings),
     db
@@ -67,6 +69,7 @@ export async function GET() {
     db.select().from(autoReplies),
     db.select().from(stockCounts),
     db.select().from(stockCountLines),
+    db.select().from(stockPurchases),
   ]);
 
   const takenAt = new Date();
@@ -84,6 +87,7 @@ export async function GET() {
       variants: variantRows,
       product_media: mediaRows,
       stock_movements: movementRows,
+      stock_purchases: purchaseRows,
       stock_counts: countRows,
       stock_count_lines: countLineRows,
       customers: customerRows,

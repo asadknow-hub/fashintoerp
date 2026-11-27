@@ -161,6 +161,27 @@ export const stockMovements = pgTable(
   (t) => [index("stock_movements_variant_idx").on(t.variantId, t.createdAt)],
 ).enableRLS();
 
+// What a batch of stock was bought for: how many pieces and the total paid.
+// One is written whenever stock is added (opening stock or received), and
+// they can also be added by hand for stock that was already here. The total
+// is empty until someone fills it in. These are money records only; they
+// never change stock.
+export const stockPurchases = pgTable(
+  "stock_purchases",
+  {
+    id: id(),
+    productId: uuid("product_id")
+      .notNull()
+      .references(() => products.id, { onDelete: "cascade" }),
+    units: integer("units").notNull(),
+    totalCost: money("total_cost"),
+    note: text("note"),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => [index("stock_purchases_product_idx").on(t.productId, t.createdAt)],
+).enableRLS();
+
 // A fresh count is saved as a snapshot: what was counted next to what the
 // system had at that moment. It is for reference only and never changes
 // stock by itself, so it can be edited or deleted freely.

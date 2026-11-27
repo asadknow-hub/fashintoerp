@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState, useSyncExternalStore, useTransition } from "react";
 import { MediaManager, type MediaItem } from "@/components/media-manager";
 import { Block, Field } from "@/components/ui";
-import { sortSizes } from "@/lib/format";
+import { formatMoney, sortSizes } from "@/lib/format";
 import type { MediaMode } from "@/lib/media-rules";
 import { createProduct, discardUpload } from "../actions";
 
@@ -114,6 +114,7 @@ type Draft = {
   price: string;
   cost: string;
   lowStockAt: string;
+  totalPaid: string;
   media: MediaItem[];
 };
 
@@ -127,6 +128,7 @@ const EMPTY: Draft = {
   price: "",
   cost: "",
   lowStockAt: "5",
+  totalPaid: "",
   media: [],
 };
 
@@ -158,7 +160,11 @@ const started = (draft: Draft) =>
 const never = () => () => {};
 
 // The draft lives in the browser, so the editor is only drawn there.
-export function ProductCreator(props: { mode: MediaMode; offReason: string | null }) {
+export function ProductCreator(props: {
+  mode: MediaMode;
+  offReason: string | null;
+  currency: string;
+}) {
   const inBrowser = useSyncExternalStore(
     never,
     () => true,
@@ -167,7 +173,15 @@ export function ProductCreator(props: { mode: MediaMode; offReason: string | nul
   return inBrowser ? <Editor {...props} /> : <div className="card h-96 animate-pulse" />;
 }
 
-function Editor({ mode, offReason }: { mode: MediaMode; offReason: string | null }) {
+function Editor({
+  mode,
+  offReason,
+  currency,
+}: {
+  mode: MediaMode;
+  offReason: string | null;
+  currency: string;
+}) {
   const router = useRouter();
   const [form, setForm] = useState<Draft>(() => readDraft() ?? EMPTY);
   const [restored, setRestored] = useState(() => started(form));
@@ -221,6 +235,7 @@ function Editor({ mode, offReason }: { mode: MediaMode; offReason: string | null
         price: form.price,
         cost: form.cost,
         lowStockAt: form.lowStockAt,
+        totalPaid: form.totalPaid,
         variants: rows.flatMap((color) =>
           columns.map((size) => ({ size, color, stock: amountAt(color, size) })),
         ),
@@ -458,6 +473,25 @@ function Editor({ mode, offReason }: { mode: MediaMode; offReason: string | null
                 />
               </Field>
             </div>
+            <Field
+              label="Total paid for all this stock (optional)"
+              className="mt-2"
+              hint={
+                Number(form.totalPaid) > 0 && total > 0
+                  ? `${formatMoney(Number(form.totalPaid) / total, currency)} per piece for ${total} pieces${
+                      form.cost.trim() ? "" : " — used as your cost"
+                    }`
+                  : "What you paid for the whole lot. If you leave “Your cost” empty, it is worked out from this."
+              }
+            >
+              <input
+                value={form.totalPaid}
+                onChange={(event) => set({ totalPaid: event.target.value })}
+                inputMode="decimal"
+                aria-label="Total paid for all this stock"
+                className="input"
+              />
+            </Field>
             <p className="mt-1.5 text-[11px] leading-snug text-stone-500">
               Every size and color starts with this price. You can set different
               prices for each one after saving.

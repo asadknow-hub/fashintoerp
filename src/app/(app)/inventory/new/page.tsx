@@ -2,10 +2,11 @@ import { FreshOnVisit } from "@/components/fresh-on-visit";
 import { PageHeader } from "@/components/ui";
 import { requireUser } from "@/lib/auth";
 import { mediaMode, mediaOffReason } from "@/lib/media";
+import { getPrefs } from "@/lib/settings";
 import { ProductCreator } from "./product-creator";
 
 export default async function NewProductPage() {
-  await requireUser();
+  const [, { currency }] = await Promise.all([requireUser(), getPrefs()]);
   return (
     <>
       <PageHeader
@@ -13,7 +14,7 @@ export default async function NewProductPage() {
         subtitle="Add its photos, pick the sizes and colors, and type the stock into the grid."
       />
       <FreshOnVisit>
-        <ProductCreator mode={mediaMode()} offReason={mediaOffReason()} />
+        <ProductCreator mode={mediaMode()} offReason={mediaOffReason()} currency={currency} />
       </FreshOnVisit>
     </>
   );

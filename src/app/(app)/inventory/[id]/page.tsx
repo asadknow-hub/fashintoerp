@@ -10,6 +10,7 @@ import {
   stockCountLines,
   stockCounts,
   stockMovements,
+  stockPurchases,
   users,
   variants,
 } from "@/db/schema";
@@ -18,9 +19,12 @@ import { formatDateTime, formatMoney, isUuid, sortSizes } from "@/lib/format";
 import { mediaMode, mediaOffReason } from "@/lib/media";
 import { getPrefs } from "@/lib/settings";
 import {
+  addPurchase,
   addVariants,
+  deletePurchase,
   setArchived,
   updateProduct,
+  updatePurchase,
   updateVariants,
 } from "../actions";
 import { MediaBlock } from "./media-block";
@@ -53,6 +57,7 @@ export default async function ProductPage({
     history,
     countRows,
     countLines,
+    purchases,
   ] = await Promise.all([
     db.select().from(products).where(eq(products.id, id)),
     getPrefs(),
@@ -113,6 +118,21 @@ export default async function ProductPage({
       .from(stockCountLines)
       .innerJoin(stockCounts, eq(stockCounts.id, stockCountLines.countId))
       .where(eq(stockCounts.productId, id)),
+    // What each lot of stock was bought for, newest first.
+    db
+      .select({
+        id: stockPurchases.id,
+        units: stockPurchases.units,
+        totalCost: stockPurchases.totalCost,
+        note: stockPurchases.note,
+        createdAt: stockPurchases.createdAt,
+        by: users.name,
+      })
+      .from(stockPurchases)
+      .leftJoin(users, eq(users.id, stockPurchases.createdBy))
+      .where(eq(stockPurchases.productId, id))
+      .orderBy(desc(stockPurchases.createdAt))
+      .limit(100),
   ]);
   if (!product) notFound();
 
@@ -136,8 +156,18 @@ export default async function ProductPage({
     (v) => v.stock > 0 && v.stock <= v.lowStockAt,
   ).length;
 
+  const priced = purchases.filter((purchase) => purchase.totalCost !== null);
+  const paidTotal = priced.reduce((sum, purchase) => sum + Number(purchase.totalCost), 0);
+  const paidPieces = priced.reduce((sum, purchase) => sum + purchase.units, 0);
+  const unpriced = purchases.length - priced.length;
+
   const stats = [
     { label: "In stock", value: `${units} units` },
+    {
+      label: "Paid for stock (total)",
+      value: priced.length ? formatMoney(paidTotal, currency) : "Not recorded",
+      tone: priced.length ? "" : "text-stone-400",
+    },
     { label: "Stock value (cost)", value: formatMoney(costValue, currency) },
     {
       label: "Stock value (selling)",
@@ -181,9 +211,12 @@ export default async function ProductPage({
         </form>
       </div>
 
-      <dl className="card grid grid-cols-2 gap-px overflow-hidden bg-stone-300 lg:grid-cols-4">
+      <dl className="card grid grid-cols-2 gap-px overflow-hidden bg-stone-300 lg:grid-cols-5">
         {stats.map((stat) => (
-          <div key={stat.label} className="bg-white px-3 py-1.5">
+          <div
+            key={stat.label}
+            className="bg-white px-3 py-1.5 max-lg:last:col-span-2"
+          >
             <dt className="text-xs text-stone-500">{stat.label}</dt>
             <dd
               className={
@@ -210,6 +243,7 @@ export default async function ProductPage({
             sizes={sizes}
             colors={colors}
             productId={product.id}
+            currency={currency}
             counts={countRows.map((count) => ({
               id: count.id,
               note: count.note,
@@ -408,6 +442,126 @@ export default async function ProductPage({
                 />
               </Field>
             </ActionForm>
+          </Block>
+
+          <Block
+            title="What the stock was bought for"
+            flush
+            aside={
+              <span className="text-xs text-stone-600 tabular-nums">
+                {priced.length
+                  ? `${formatMoney(paidTotal, currency)} for ${paidPieces} pieces`
+                  : "Nothing recorded yet"}
+              </span>
+            }
+          >
+            <div className="divide-y divide-stone-100" data-purchases>
+              {unpriced > 0 && (
+                <p className="bg-amber-50 px-3 py-1.5 text-xs text-amber-900">
+                  {unpriced} {unpriced === 1 ? "lot has" : "lots have"} no amount yet. Open it and
+                  type what you paid.
+                </p>
+              )}
+              {purchases.map((purchase) => (
+                <details key={purchase.id} data-purchase className="group">
+                  <summary className="flex cursor-pointer list-none items-start gap-2 px-3 py-1.5 text-xs hover:bg-stone-50">
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-sm">{purchase.note ?? "Stock"}</span>
+                      <span className="text-stone-500">
+                        {formatDateTime(purchase.createdAt, timezone)}
+                        {purchase.by ? ` · ${purchase.by}` : ""}
+                      </span>
+                    </span>
+                    <span className="shrink-0 text-right tabular-nums">
+                      {purchase.totalCost === null ? (
+                        <span className="text-sm font-semibold text-amber-700">Not recorded</span>
+                      ) : (
+                        <span className="block text-sm font-semibold">
+                          {formatMoney(purchase.totalCost, currency)}
+                        </span>
+                      )}
+                      <span className="text-stone-500">
+                        {purchase.units} pcs
+                        {purchase.totalCost !== null &&
+                          ` · ${formatMoney(Number(purchase.totalCost) / purchase.units, currency)} each`}
+                      </span>
+                    </span>
+                    <span className="mt-0.5 shrink-0 text-stone-400 group-open:hidden">Edit</span>
+                    <span className="mt-0.5 hidden shrink-0 text-stone-400 group-open:inline">
+                      Close
+                    </span>
+                  </summary>
+                  <div className="space-y-2 bg-stone-50 px-3 py-2">
+                    <ActionForm
+                      action={updatePurchase.bind(null, purchase.id)}
+                      submit="Save"
+                      submitClassName="btn btn-sm"
+                      className="grid grid-cols-2 gap-2"
+                      footerClassName="col-span-2 flex items-center gap-2"
+                    >
+                      <Field label="Total paid">
+                        <input
+                          name="totalPaid"
+                          inputMode="decimal"
+                          defaultValue={
+                            purchase.totalCost === null ? "" : Number(purchase.totalCost)
+                          }
+                          className="input"
+                        />
+                      </Field>
+                      <Field label="Pieces">
+                        <input
+                          name="units"
+                          inputMode="numeric"
+                          defaultValue={purchase.units}
+                          className="input"
+                        />
+                      </Field>
+                      <Field label="Note" className="col-span-2">
+                        <input name="note" defaultValue={purchase.note ?? ""} className="input" />
+                      </Field>
+                    </ActionForm>
+                    <ActionForm
+                      action={deletePurchase.bind(null, purchase.id)}
+                      submit="Delete this record"
+                      submitClassName="cursor-pointer text-xs text-rose-700 underline"
+                      confirm="Delete this cost record? Stock will not change."
+                    />
+                  </div>
+                </details>
+              ))}
+              <details className="group">
+                <summary className="cursor-pointer list-none px-3 py-1.5 text-xs font-medium text-stone-700 hover:bg-stone-50">
+                  + Record what stock cost
+                </summary>
+                <ActionForm
+                  action={addPurchase.bind(null, product.id)}
+                  submit="Save"
+                  submitClassName="btn btn-sm"
+                  className="grid grid-cols-2 gap-2 bg-stone-50 px-3 py-2"
+                  footerClassName="col-span-2 flex items-center gap-2"
+                >
+                  <Field label="Total paid">
+                    <input name="totalPaid" inputMode="decimal" required className="input" />
+                  </Field>
+                  <Field label="For how many pieces">
+                    <input
+                      name="units"
+                      inputMode="numeric"
+                      defaultValue={units || ""}
+                      required
+                      className="input"
+                    />
+                  </Field>
+                  <Field label="Note" className="col-span-2">
+                    <input name="note" placeholder="Supplier, invoice…" className="input" />
+                  </Field>
+                  <p className="col-span-2 text-[11px] text-stone-500">
+                    This only records the money. It does not add or remove stock.
+                  </p>
+                </ActionForm>
+              </details>
+            </div>
           </Block>
 
           <Block title="Stock history" flush>

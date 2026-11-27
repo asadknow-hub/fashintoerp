@@ -3,6 +3,7 @@
 import { startTransition, useActionState, useState, useTransition } from "react";
 import type { ActionState } from "@/components/action-form";
 import { Block } from "@/components/ui";
+import { formatMoney } from "@/lib/format";
 import { adjustStockGrid, applyCount, deleteCount, saveCount } from "../actions";
 
 export type GridVariant = {
@@ -48,12 +49,14 @@ export function StockGrid({
   sizes,
   colors,
   counts,
+  currency,
 }: {
   productId: string;
   variants: GridVariant[];
   sizes: (string | null)[];
   colors: (string | null)[];
   counts: CountSnapshot[];
+  currency: string;
 }) {
   // One save path for all three modes, so the editor always closes in the
   // same screen update that brings the fresh numbers.
@@ -70,6 +73,8 @@ export function StockGrid({
   const [mode, setMode] = useState<Mode | null>(null);
   const [typed, setTyped] = useState<Record<string, string>>({});
   const [note, setNote] = useState("");
+  // What a delivery cost in total; only asked for when receiving stock.
+  const [paid, setPaid] = useState("");
   // The snapshot being edited, if any.
   const [editing, setEditing] = useState<CountSnapshot | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
@@ -95,6 +100,7 @@ export function StockGrid({
         : {},
     );
     setNote(snapshot?.note ?? "");
+    setPaid("");
     setEditing(snapshot);
     setError(null);
     setNotice(null);
@@ -136,6 +142,7 @@ export function StockGrid({
     const data = new FormData();
     data.set("kind", mode);
     data.set("note", note);
+    if (mode === "received") data.set("totalPaid", paid.trim());
     if (editing) data.set("countId", editing.id);
     for (const v of variants) {
       const raw = typed[v.id]?.trim();
@@ -147,8 +154,11 @@ export function StockGrid({
   const act = (work: () => Promise<ActionState>) =>
     startWork(async () => {
       const outcome = await work();
-      setError(outcome?.error ?? null);
-      setNotice(outcome?.ok ?? null);
+      // Shown together with the refreshed numbers, not a moment before them.
+      startTransition(() => {
+        setError(outcome?.error ?? null);
+        setNotice(outcome?.ok ?? null);
+      });
     });
 
   const th = "px-2 py-1.5 text-center font-semibold text-stone-800";
@@ -312,6 +322,16 @@ export function StockGrid({
             aria-label="Note"
             className="input max-w-xs flex-1 py-1.5"
           />
+          {mode === "received" && (
+            <input
+              value={paid}
+              onChange={(event) => setPaid(event.target.value)}
+              inputMode="decimal"
+              placeholder="Total paid (optional)"
+              aria-label="Total paid"
+              className="input w-44 py-1.5"
+            />
+          )}
           {mode === "count" ? (
             <span data-count-summary className="text-xs text-stone-700">
               {counted.length === 0 ? (
@@ -331,6 +351,12 @@ export function StockGrid({
               {total === before
                 ? "No change yet"
                 : `Total ${before} → ${total} (${total > before ? "+" : ""}${total - before})`}
+              {mode === "received" && Number(paid) > 0 && total > before && (
+                <b className="text-stone-700">
+                  {" "}
+                  · {formatMoney(Number(paid) / (total - before), currency)} per piece
+                </b>
+              )}
             </span>
           )}
           <span className="ml-auto flex gap-2">
