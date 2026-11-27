@@ -279,6 +279,18 @@ export const orderStatus = pgEnum("order_status", [
 
 export const paymentMethod = pgEnum("payment_method", ["cod", "prepaid"]);
 
+// The courier companies that deliver orders, with what each usually charges
+// for one delivery. Set up in Settings and picked when an order is entered
+// in the courier's portal. A company that orders already point at is hidden
+// (not active) rather than deleted.
+export const deliveryCompanies = pgTable("delivery_companies", {
+  id: id(),
+  name: text("name").notNull(),
+  rate: money("rate").notNull().default("0"),
+  active: boolean("active").notNull().default(true),
+  createdAt: createdAt(),
+}).enableRLS();
+
 export const orders = pgTable(
   "orders",
   {
@@ -304,6 +316,16 @@ export const orders = pgTable(
     codAmount: money("cod_amount").notNull().default("0"),
     // What the courier should know: "call before coming", "leave at reception".
     instruction: text("instruction"),
+    // The steps after an order is taken: entered in the courier's portal
+    // (with which company), handed over, and delivered. The charge is what
+    // the courier billed for this delivery, confirmed when it is delivered.
+    deliveryCompanyId: uuid("delivery_company_id").references(() => deliveryCompanies.id, {
+      onDelete: "set null",
+    }),
+    portalAt: timestamp("portal_at", { withTimezone: true }),
+    dispatchedAt: timestamp("dispatched_at", { withTimezone: true }),
+    deliveredAt: timestamp("delivered_at", { withTimezone: true }),
+    deliveryCharge: money("delivery_charge"),
     shippingFee: money("shipping_fee").notNull().default("0"),
     discount: money("discount").notNull().default("0"),
     total: money("total").notNull().default("0"),

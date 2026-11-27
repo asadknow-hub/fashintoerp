@@ -1,21 +1,27 @@
-import { eq, sql } from "drizzle-orm";
+import { asc, eq, sql } from "drizzle-orm";
 import { headers } from "next/headers";
 import Link from "next/link";
 import { ActionForm } from "@/components/action-form";
 import { Badge, Field, PageHeader } from "@/components/ui";
 import { db } from "@/db";
-import { users } from "@/db/schema";
+import { deliveryCompanies, users } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
 import { channelStatus, webhookReady } from "@/lib/chat";
-import { formatDateTime } from "@/lib/format";
+import { CURRENCY, formatDateTime } from "@/lib/format";
 import { getSettings } from "@/lib/settings";
 import { changePassword, createRecoveryCode, updateBusiness } from "./actions";
+import { Companies } from "./companies";
 
 export default async function SettingsPage() {
   const user = await requireUser();
   const owner = user.role === "owner";
-  const [business, [me]] = await Promise.all([
+  const [business, companies, [me]] = await Promise.all([
     getSettings(),
+    db
+      .select({ id: deliveryCompanies.id, name: deliveryCompanies.name, rate: deliveryCompanies.rate })
+      .from(deliveryCompanies)
+      .where(eq(deliveryCompanies.active, true))
+      .orderBy(asc(deliveryCompanies.name)),
     db
       .select({ hasCode: sql<boolean>`${users.recoveryHash} is not null` })
       .from(users)
@@ -149,6 +155,19 @@ export default async function SettingsPage() {
                 : "You don't have one yet. Without it, a forgotten password can lock you out."}
             </p>
           </ActionForm>
+        </section>
+
+        <section className="scroll-mt-20 space-y-3" id="delivery-companies">
+          <h2 className="text-sm font-bold text-stone-900">Delivery companies</h2>
+          <Companies
+            canEdit={owner}
+            currency={CURRENCY}
+            companies={companies.map((company) => ({ ...company, rate: Number(company.rate) }))}
+          />
+          <p className="text-xs text-stone-500">
+            The delivery charge is what the company usually bills you for one order. It is asked
+            again when an order is marked delivered, since some areas cost more.
+          </p>
         </section>
 
         {owner && (

@@ -1592,12 +1592,6 @@ function Editor({
                 </span>
               </dd>
             </div>
-            {!codWrong && Math.abs(codAmount - total) > 0.004 && (
-              <div className="flex items-center justify-between px-3 py-2">
-                <dt className="font-semibold">Order total</dt>
-                <dd>{formatMoney(total, currency)}</dd>
-              </div>
-            )}
             <div className="mt-1 flex items-center justify-between rounded-lg bg-brand-100 px-3 py-2.5 text-lg font-extrabold text-brand-700">
               <dt>Total (COD)</dt>
               <dd data-order-total>{formatMoney(codWrong ? total : codAmount, currency)}</dd>

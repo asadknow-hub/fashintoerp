@@ -6,6 +6,7 @@ import { db } from "@/db";
 import { orderItems, orders, products, stockPurchases, variants } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
 import { formatMoney } from "@/lib/format";
+import { orderAmount } from "@/lib/order-amount";
 import { getPrefs } from "@/lib/settings";
 
 const periods = [
@@ -32,7 +33,7 @@ export default async function ReportsPage({ searchParams }: PageProps<"/reports"
     db
       .select({
         orders: sql<number>`count(*)::int`,
-        revenue: sql<string>`coalesce(sum(${orders.total}), 0)`,
+        revenue: sql<string>`coalesce(sum(${orderAmount}), 0)`,
       })
       .from(orders)
       .where(counted),

@@ -7,6 +7,7 @@ import { db } from "@/db";
 import {
   conversations,
   customers,
+  deliveryCompanies,
   orderItems,
   orders,
   products,
@@ -266,6 +267,26 @@ export async function createOrder(
 }
 
 const statuses = orders.status.enumValues;
+
+// The step dates that go with a status: reaching a step keeps the date it
+// was first reached, and going back clears the dates of the steps undone.
+const steps: Partial<Record<(typeof statuses)[number], number>> = {
+  new: 0,
+  confirmed: 1,
+  packed: 1,
+  shipped: 2,
+  delivered: 3,
+};
+function stamps(status: (typeof statuses)[number]) {
+  const step = steps[status];
+  // A cancelled or returned order keeps the dates of what happened before.
+  if (step === undefined) return {};
+  return {
+    portalAt: step >= 1 ? sql`coalesce(${orders.portalAt}, now())` : null,
+    dispatchedAt: step >= 2 ? sql`coalesce(${orders.dispatchedAt}, now())` : null,
+    deliveredAt: step >= 3 ? sql`coalesce(${orders.deliveredAt}, now())` : null,
+  };
+}
 const closed = ["cancelled", "returned"];
 
 export async function updateOrder(
@@ -324,6 +345,7 @@ export async function updateOrder(
         .update(orders)
         .set({
           status,
+          ...stamps(status),
           trackingNumber: typedRef,
           notes: optional(form, "notes"),
           // A changed date keeps the order's time of day.
@@ -418,4 +440,62 @@ export async function watchShipperRef(typed: string) {
 export async function releaseShipperRef() {
   const user = await requireUser();
   await db.delete(shipperRefClaims).where(eq(shipperRefClaims.userId, user.id));
+}
+
+// The ticks in the Actions pop-up of the orders list: entered in the delivery
+// company's portal (and with which company), dispatched, delivered. Marking
+// an order delivered also records what the company charged for it.
+export async function setOrderProgress(
+  orderId: string,
+  _state: ActionState,
+  form: FormData,
+): Promise<ActionState> {
+  await requireUser();
+  if (!isUuid(orderId)) return { error: "Order not found." };
+  // A later step means the earlier ones happened too.
+  const delivered = form.get("delivered") === "on";
+  const dispatched = delivered || form.get("dispatched") === "on";
+  const portal = dispatched || form.get("portal") === "on";
+  const companyId = text(form, "companyId");
+  if (portal && !isUuid(companyId)) return { error: "Choose the delivery company." };
+  const charge = delivered ? amount(form, "deliveryCharge") : null;
+  if (delivered && (text(form, "deliveryCharge") === "" || charge === null)) {
+    return { error: "Confirm the delivery charge for this order." };
+  }
+
+  try {
+    await db.transaction(async (tx) => {
+      const [order] = await tx
+        .select({ status: orders.status })
+        .from(orders)
+        .where(eq(orders.id, orderId))
+        .for("update");
+      if (!order) throw new StockError("Order not found.");
+      if (closed.includes(order.status)) {
+        throw new StockError(`This order is ${order.status}, so its steps can't be changed.`);
+      }
+      if (portal) {
+        const [company] = await tx
+          .select({ id: deliveryCompanies.id })
+          .from(deliveryCompanies)
+          .where(eq(deliveryCompanies.id, companyId));
+        if (!company) throw new StockError("That delivery company no longer exists.");
+      }
+      const status = delivered ? "delivered" : dispatched ? "shipped" : portal ? "confirmed" : "new";
+      await tx
+        .update(orders)
+        .set({
+          status,
+          ...stamps(status),
+          deliveryCompanyId: portal ? companyId : null,
+          deliveryCharge: charge,
+        })
+        .where(eq(orders.id, orderId));
+    });
+  } catch (err) {
+    if (err instanceof StockError) return { error: err.message };
+    throw err;
+  }
+  refresh();
+  return { ok: "Saved." };
 }

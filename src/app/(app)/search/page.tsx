@@ -1,6 +1,13 @@
 import { and, desc, eq, exists, ilike, or, sql } from "drizzle-orm";
 import Link from "next/link";
-import { Badge, Block, Empty, orderStatusTone, PageHeader } from "@/components/ui";
+import {
+  Badge,
+  Block,
+  Empty,
+  orderStatusLabel,
+  orderStatusTone,
+  PageHeader,
+} from "@/components/ui";
 import { db } from "@/db";
 import { customers, orders, productMedia, products, variants } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
@@ -57,7 +64,8 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
             id: orders.id,
             number: orders.number,
             status: orders.status,
-            total: orders.total,
+            payment: orders.payment,
+            codAmount: orders.codAmount,
             createdAt: orders.createdAt,
             customer: customers.name,
             phone: customers.phone,
@@ -150,8 +158,8 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
                       {order.customer}
                       {order.phone ? ` · ${order.phone}` : ""} · {formatDate(order.createdAt, timezone)}
                     </span>
-                    <Badge tone={orderStatusTone[order.status]}>{order.status}</Badge>
-                    <span className="shrink-0 tabular-nums">{formatMoney(order.total, currency)}</span>
+                    <Badge tone={orderStatusTone[order.status]}>{orderStatusLabel[order.status]}</Badge>
+                    <span className="shrink-0 tabular-nums">{order.payment === "cod" ? formatMoney(order.codAmount, currency) : "Paid"}</span>
                   </Link>
                 </li>
               ))}

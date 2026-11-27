@@ -85,6 +85,13 @@
       "when": 1795780863410,
       "tag": "0011_bundle_prices",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1795784403582,
+      "tag": "0012_delivery_companies_and_order_steps",
+      "breakpoints": true
     }
   ]
 }

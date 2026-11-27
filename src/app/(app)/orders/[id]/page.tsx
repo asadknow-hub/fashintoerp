@@ -2,9 +2,16 @@ import { eq } from "drizzle-orm";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ActionForm } from "@/components/action-form";
-import { Badge, Field, orderStatusTone } from "@/components/ui";
+import { Badge, Field, orderStatusLabel, orderStatusTone } from "@/components/ui";
 import { db } from "@/db";
-import { customers, orderItems, orders, products, variants } from "@/db/schema";
+import {
+  customers,
+  deliveryCompanies,
+  orderItems,
+  orders,
+  products,
+  variants,
+} from "@/db/schema";
 import { requireUser } from "@/lib/auth";
 import { formatDateTime, formatMoney, isUuid, variantLabel } from "@/lib/format";
 import { getPrefs } from "@/lib/settings";
@@ -12,9 +19,9 @@ import { updateOrder } from "../actions";
 
 const statusLabel = {
   new: "New",
-  confirmed: "Confirmed",
+  confirmed: "In delivery portal",
   packed: "Packed",
-  shipped: "Shipped",
+  shipped: "Dispatched",
   delivered: "Delivered",
   cancelled: "Cancelled (puts stock back)",
   returned: "Returned (puts stock back)",
@@ -26,12 +33,13 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
   if (!isUuid(id)) notFound();
 
   const [row] = await db
-    .select({ order: orders, customer: customers })
+    .select({ order: orders, customer: customers, company: deliveryCompanies.name })
     .from(orders)
     .innerJoin(customers, eq(customers.id, orders.customerId))
+    .leftJoin(deliveryCompanies, eq(deliveryCompanies.id, orders.deliveryCompanyId))
     .where(eq(orders.id, id));
   if (!row) notFound();
-  const { order, customer } = row;
+  const { order, customer, company } = row;
 
   const { currency, timezone } = await getPrefs();
   const items = await db
@@ -65,7 +73,7 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
         </Link>
         <h1 className="mt-1 flex items-center gap-3 text-xl font-semibold tracking-tight">
           Order #{order.number}
-          <Badge tone={orderStatusTone[order.status]}>{order.status}</Badge>
+          <Badge tone={orderStatusTone[order.status]}>{orderStatusLabel[order.status]}</Badge>
         </h1>
         <p className="text-sm text-stone-500">{formatDateTime(order.createdAt, timezone)}</p>
       </div>
@@ -116,15 +124,14 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
               </tbody>
             </table>
             <dl className="space-y-1 border-t border-stone-200 px-3 py-1.5 text-sm">
-              <Line label="Subtotal" value={formatMoney(subtotal, currency)} />
-              <Line label="Delivery" value={formatMoney(order.shippingFee, currency)} />
-              {Number(order.discount) > 0 && (
-                <Line label="Discount" value={"− " + formatMoney(order.discount, currency)} />
+              <Line label="Items" value={formatMoney(subtotal, currency)} />
+              {Number(order.shippingFee) > 0 && (
+                <Line label="Delivery" value={formatMoney(order.shippingFee, currency)} />
               )}
-              <Line label="Total" value={formatMoney(order.total, currency)} bold />
               <Line
-                label="To collect on delivery (COD)"
+                label="COD (to collect on delivery)"
                 value={formatMoney(order.codAmount, currency)}
+                bold
               />
             </dl>
           </section>
@@ -213,6 +220,30 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
             <div>
               <p className="label">Shipper Ref</p>
               <p>{order.trackingNumber}</p>
+            </div>
+          )}
+          {(order.portalAt || company) && (
+            <div data-order-delivery>
+              <p className="label">Delivery</p>
+              {company && <p className="font-semibold">{company}</p>}
+              {order.portalAt && (
+                <p className="text-stone-600">
+                  In portal: {formatDateTime(order.portalAt, timezone)}
+                </p>
+              )}
+              {order.dispatchedAt && (
+                <p className="text-stone-600">
+                  Dispatched: {formatDateTime(order.dispatchedAt, timezone)}
+                </p>
+              )}
+              {order.deliveredAt && (
+                <p className="text-stone-600">
+                  Delivered: {formatDateTime(order.deliveredAt, timezone)}
+                </p>
+              )}
+              {order.deliveryCharge !== null && (
+                <p>Delivery charge: {formatMoney(order.deliveryCharge, currency)}</p>
+              )}
             </div>
           )}
           {order.instruction && (

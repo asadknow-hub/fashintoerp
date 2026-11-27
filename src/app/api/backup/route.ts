@@ -5,6 +5,7 @@ import {
   conversations,
   customers,
   messages,
+  deliveryCompanies,
   orderItems,
   orders,
   productMedia,
@@ -14,6 +15,7 @@ import {
   stockCountLines,
   stockCounts,
   stockMovements,
+  stockPurchaseLines,
   stockPurchases,
   users,
   variants,
@@ -44,6 +46,8 @@ export async function GET() {
     countRows,
     countLineRows,
     purchaseRows,
+    purchaseLineRows,
+    companyRows,
   ] = await Promise.all([
     db.select().from(settings),
     db
@@ -70,6 +74,8 @@ export async function GET() {
     db.select().from(stockCounts),
     db.select().from(stockCountLines),
     db.select().from(stockPurchases),
+    db.select().from(stockPurchaseLines),
+    db.select().from(deliveryCompanies),
   ]);
 
   const takenAt = new Date();
@@ -88,6 +94,8 @@ export async function GET() {
       product_media: mediaRows,
       stock_movements: movementRows,
       stock_purchases: purchaseRows,
+      stock_purchase_lines: purchaseLineRows,
+      delivery_companies: companyRows,
       stock_counts: countRows,
       stock_count_lines: countLineRows,
       customers: customerRows,

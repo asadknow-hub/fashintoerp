@@ -5,6 +5,7 @@ import { db } from "@/db";
 import { customers, orders } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
 import { formatDate, formatMoney } from "@/lib/format";
+import { orderAmount } from "@/lib/order-amount";
 import { getPrefs } from "@/lib/settings";
 
 const PAGE_SIZE = 50;
@@ -32,7 +33,7 @@ export default async function CustomersPage({
         area: customers.area,
         createdAt: customers.createdAt,
         orderCount: sql<number>`count(${orders.id})::int`,
-        spent: sql<string>`coalesce(sum(${orders.total}) filter (where ${orders.status} not in ('cancelled', 'returned')), 0)`,
+        spent: sql<string>`coalesce(sum(${orderAmount}) filter (where ${orders.status} not in ('cancelled', 'returned')), 0)`,
       })
       .from(customers)
       .leftJoin(orders, eq(orders.customerId, customers.id))

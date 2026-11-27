@@ -126,6 +126,17 @@ export function Empty({
   );
 }
 
+// How each step of an order is called on screen.
+export const orderStatusLabel = {
+  new: "New",
+  confirmed: "In portal",
+  packed: "Packed",
+  shipped: "Dispatched",
+  delivered: "Delivered",
+  cancelled: "Cancelled",
+  returned: "Returned",
+} as const;
+
 export const orderStatusTone = {
   new: "blue",
   confirmed: "blue",

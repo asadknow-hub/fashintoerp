@@ -1,7 +1,14 @@
 import { and, asc, desc, eq, inArray, lte, notInArray, sql } from "drizzle-orm";
 import { Package, TrendingUp, TriangleAlert, Truck } from "lucide-react";
 import Link from "next/link";
-import { Badge, Block, orderStatusTone, PageHeader, stockTone } from "@/components/ui";
+import {
+  Badge,
+  Block,
+  orderStatusLabel,
+  orderStatusTone,
+  PageHeader,
+  stockTone,
+} from "@/components/ui";
 import { db } from "@/db";
 import {
   customers,
@@ -13,6 +20,7 @@ import {
 } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
 import { formatDate, formatMoney, variantLabel } from "@/lib/format";
+import { orderAmount } from "@/lib/order-amount";
 import { getPrefs } from "@/lib/settings";
 
 export default async function DashboardPage() {
@@ -21,7 +29,7 @@ export default async function DashboardPage() {
   const [[sales], [toShip], [onHand], lowStock, recentOrders, [care]] = await Promise.all([
     db
       .select({
-        total: sql<string>`coalesce(sum(${orders.total}), 0)`,
+        total: sql<string>`coalesce(sum(${orderAmount}), 0)`,
         count: sql<number>`count(*)::int`,
       })
       .from(orders)
@@ -62,7 +70,8 @@ export default async function DashboardPage() {
         id: orders.id,
         number: orders.number,
         status: orders.status,
-        total: orders.total,
+        payment: orders.payment,
+        codAmount: orders.codAmount,
         createdAt: orders.createdAt,
         customer: customers.name,
       })
@@ -193,9 +202,9 @@ export default async function DashboardPage() {
                 <span className="min-w-0 flex-1 truncate text-stone-600">
                   {order.customer} · {formatDate(order.createdAt, timezone)}
                 </span>
-                <Badge tone={orderStatusTone[order.status]}>{order.status}</Badge>
+                <Badge tone={orderStatusTone[order.status]}>{orderStatusLabel[order.status]}</Badge>
                 <span className="text-right tabular-nums">
-                  {formatMoney(order.total, currency)}
+                  {order.payment === "cod" ? formatMoney(order.codAmount, currency) : "Paid"}
                 </span>
               </Link>
             ))}
