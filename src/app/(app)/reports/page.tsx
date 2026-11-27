@@ -1,5 +1,5 @@
 import { and, eq, inArray, isNull, lte, notInArray, sql } from "drizzle-orm";
-import { Coins, Package, ShoppingCart, TrendingUp, Truck, Wallet } from "lucide-react";
+import { Coins, Package, ShoppingCart, TrendingUp, Truck, Undo2, Wallet } from "lucide-react";
 import Link from "next/link";
 import { Block, PageHeader } from "@/components/ui";
 import { db } from "@/db";
@@ -16,6 +16,7 @@ import { formatMoney } from "@/lib/format";
 import {
   courierCharges,
   courierCollected,
+  customerRefund,
   itemShares,
   orderAmount,
   orderIncome,
@@ -55,7 +56,8 @@ export default async function ReportsPage({ searchParams }: PageProps<"/reports"
       : sql`${settledAt} >= now() - make_interval(days => ${period.days})`,
   );
 
-  const [[sales], [pieces], [stock], [paid], [low], best, payouts, [earned]] = await Promise.all([
+  const [[sales], [pieces], [stock], [paid], [low], best, payouts, [earned], [returns]] =
+    await Promise.all([
     db
       .select({
         orders: sql<number>`count(*)::int`,
@@ -123,6 +125,17 @@ export default async function ReportsPage({ searchParams }: PageProps<"/reports"
       })
       .from(orders)
       .where(settled),
+    // Returns in the period: what goes back to customers and what it costs.
+    db
+      .select({
+        orders: sql<number>`count(*)::int`,
+        refunds: sql<string>`coalesce(sum(${customerRefund}), 0)`,
+        unsent: sql<string>`coalesce(sum(${customerRefund}) filter (where ${orders.refundSentAt} is null), 0)`,
+        covered: sql<string>`coalesce(sum(${orders.returnFee}), 0)`,
+        charges: sql<string>`coalesce(sum(${orders.returnCharge}), 0)`,
+      })
+      .from(orders)
+      .where(and(settled, eq(orders.status, "returned"))),
   ]);
   const payoutTotal = payouts.reduce(
     (sum, row) => ({
@@ -322,6 +335,29 @@ export default async function ReportsPage({ searchParams }: PageProps<"/reports"
               )}
             </table>
           </div>
+        </Block>
+      </div>
+
+      <div className="mt-3">
+        <Block title="Returns" subtitle={period.label} icon={<Undo2 />}>
+          <dl className="grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-5" data-returns>
+            {[
+              ["Returned orders", String(returns.orders)],
+              ["Refunds to customers", formatMoney(returns.refunds, currency)],
+              ["Refunds still to send", formatMoney(returns.unsent, currency)],
+              ["Return charges", formatMoney(returns.charges, currency)],
+              ["Covered by customers", formatMoney(returns.covered, currency)],
+            ].map(([label, value]) => (
+              <Link
+                key={label}
+                href="/orders?status=returned"
+                className="rounded-lg bg-brand-50 px-3 py-2 hover:bg-brand-100"
+              >
+                <dt className="text-xs font-semibold text-stone-600">{label}</dt>
+                <dd className="font-bold tabular-nums">{value}</dd>
+              </Link>
+            ))}
+          </dl>
         </Block>
       </div>
     </>

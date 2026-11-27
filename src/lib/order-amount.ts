@@ -30,13 +30,12 @@ export const itemShares = sql`
 
 // The delivery company's side of an order.
 //
-// What it collected from customers: the COD of an order it delivered (that
-// stays collected even if the order was returned afterwards), plus what a
-// customer paid on a return waybill.
+// What it collected from customers: the COD of an order it delivered. That
+// stays collected even if the order was returned afterwards; the customer is
+// paid back by bank transfer, not by the delivery company.
 export const courierCollected = sql<string>`(
   case when ${orders.deliveredAt} is not null and ${orders.status} in ('delivered', 'returned')
     then ${orders.codAmount} else 0 end
-  + case when ${orders.status} = 'returned' then coalesce(${orders.returnFee}, 0) else 0 end
 )`;
 
 // What it keeps for itself: the delivery charge of a delivered order, the
@@ -49,15 +48,22 @@ export const courierCharges = sql<string>`(
   + case when ${orders.status} = 'cancelled' then coalesce(${orders.cancelFee}, 0) else 0 end
 )`;
 
-// What an order earned in the end: what the delivery company pays over
-// (collected less its charges), less the COD given back to the customer when
-// a delivered order was returned. An exchange earns COD less the delivery
-// charge like any order, which is zero when the customer pays the charge and
-// negative when they pay less.
+// What goes back to the customer by bank transfer on a return: what they
+// paid, less the part of the delivery cost they agreed to cover.
+export const customerRefund = sql<string>`(
+  case when ${orders.status} = 'returned' and ${orders.deliveredAt} is not null
+    then greatest(${orderAmount} - coalesce(${orders.returnFee}, 0), 0) else 0 end
+)`;
+
+// What an order earned in the end: the money that came in for it once it was
+// delivered (its COD, or what was paid beforehand), less everything the
+// delivery company charged, less what was sent back to the customer. A
+// return therefore costs both delivery trips, less what the customer covered.
 export const orderIncome = sql<string>`(
-  ${courierCollected} - ${courierCharges}
-  - case when ${orders.status} = 'returned' and ${orders.deliveredAt} is not null
-      then ${orders.codAmount} else 0 end
+  case when ${orders.deliveredAt} is not null and ${orders.status} in ('delivered', 'returned')
+    then ${orderAmount} else 0 end
+  - ${courierCharges}
+  - ${customerRefund}
 )`;
 
 // The day an order's money was settled: delivered, returned or cancelled.

@@ -27,6 +27,9 @@ export type OrderCard = {
   place: string;
   contents: string;
   cod: string;
+  // What the customer paid for the order: its COD, or its value when it
+  // was paid beforehand. A return gives this back, less what they cover.
+  paid: number;
   exchange: boolean;
   company: string | null;
   companyId: string | null;
@@ -130,7 +133,6 @@ export function StepsModal({
   const [charge, setCharge] = useState(
     order.deliveryCharge === null ? "" : String(order.deliveryCharge),
   );
-  const [customerPays, setCustomerPays] = useState(true);
   const [returnFee, setReturnFee] = useState("");
   const [returnCharge, setReturnCharge] = useState("");
   const [opened, setOpened] = useState(false);
@@ -154,9 +156,13 @@ export function StepsModal({
   const returnFeeShown = returnFee === "" ? usual : returnFee;
   const returnChargeShown = returnCharge === "" ? usual : returnCharge;
   const cancelFeeShown = cancelFee === "" ? (company ? company.openedFee.toFixed(2) : "10.00") : cancelFee;
-  // What a return takes off the payout: the trip, less what the customer pays.
-  const returnGap =
-    (Number(returnChargeShown) || 0) - (customerPays ? Number(returnFeeShown) || 0 : 0);
+  // A return: the customer is paid back what they paid, less the part of
+  // the delivery cost they cover; the company's charge for the trip comes
+  // off the payout; the gap between the two is what the return costs.
+  const covers = Math.max(Number(returnFeeShown) || 0, 0);
+  const tripCost = Math.max(Number(returnChargeShown) || 0, 0);
+  const refund = Math.max(order.paid - covers, 0);
+  const returnGap = tripCost - covers;
   const out = order.stage === "dispatched";
   const isDelivered = order.stage === "delivered";
 
@@ -184,63 +190,66 @@ export function StepsModal({
         >
           <div className="space-y-3 p-4 text-sm">
             <p className="rounded-lg bg-amber-50 px-3 py-2 text-amber-900">
-              The delivery company collects the parcel from the customer and brings it back. The
-              order stops counting as a sale. Its items go back into stock when you mark them
-              received on the order.
+              The delivery company collects the parcel and brings it back. You send the customer
+              their money by bank transfer, less the delivery cost they cover. The items go back
+              into stock when you mark them received on the order.
             </p>
-            <div className={row}>
-              <input
-                id={`pays-${order.id}`}
-                type="checkbox"
-                name="customerPays"
-                checked={customerPays}
-                onChange={(event) => setCustomerPays(event.target.checked)}
-                className={box}
-              />
-              <div className="min-w-0 flex-1">
-                <label htmlFor={`pays-${order.id}`} className="cursor-pointer font-semibold">
-                  Customer agreed to cover the delivery cost
-                </label>
-                {customerPays && (
-                  <label className="mt-2 block">
-                    <span className="label">On the waybill: customer pays ({currency})</span>
-                    <input
-                      name="returnFee"
-                      aria-label="Delivery cost the customer covers"
-                      inputMode="decimal"
-                      value={returnFeeShown}
-                      onChange={(event) => setReturnFee(event.target.value)}
-                      placeholder="0.00"
-                      className="input max-w-40 tabular-nums"
-                    />
-                    <span className="mt-1 block text-xs text-stone-500">
-                      Lower it if they argued it down.
-                    </span>
-                  </label>
-                )}
-              </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="block">
+                <span className="label">Delivery cost the customer covers ({currency})</span>
+                <input
+                  name="returnFee"
+                  aria-label="Delivery cost the customer covers"
+                  inputMode="decimal"
+                  value={returnFeeShown}
+                  onChange={(event) => setReturnFee(event.target.value)}
+                  placeholder="0.00"
+                  className="input tabular-nums"
+                />
+                <span className="mt-1 block text-xs text-stone-500">
+                  Normally the full charge. Lower it if they argued, or 0 if they want everything
+                  back.
+                </span>
+              </label>
+              <label className="block">
+                <span className="label">
+                  {company ? company.name : "Delivery company"} charges for the return ({currency})
+                </span>
+                <input
+                  name="returnCharge"
+                  aria-label="Return charge"
+                  inputMode="decimal"
+                  value={returnChargeShown}
+                  onChange={(event) => setReturnCharge(event.target.value)}
+                  placeholder="0.00"
+                  className="input tabular-nums"
+                />
+                <span className="mt-1 block text-xs text-stone-500">Comes off your payout.</span>
+              </label>
             </div>
-            <label className="block">
-              <span className="label">
-                {company ? company.name : "The delivery company"} charges for the return (
-                {currency})
-              </span>
-              <input
-                name="returnCharge"
-                aria-label="Return charge"
-                inputMode="decimal"
-                value={returnChargeShown}
-                onChange={(event) => setReturnCharge(event.target.value)}
-                placeholder="0.00"
-                className="input max-w-40 tabular-nums"
-              />
-            </label>
+            <dl
+              data-return-math
+              className="rounded-lg border border-stone-200 px-3 py-1 tabular-nums"
+            >
+              <div className="flex justify-between border-b border-stone-100 py-1.5">
+                <dt>Customer paid</dt>
+                <dd>{money(order.paid)}</dd>
+              </div>
+              <div className="flex justify-between border-b border-stone-100 py-1.5">
+                <dt>Delivery cost they cover</dt>
+                <dd>− {money(covers)}</dd>
+              </div>
+              <div className="flex justify-between py-1.5 font-bold">
+                <dt>Refund to the customer (bank transfer)</dt>
+                <dd data-refund>{money(refund)}</dd>
+              </div>
+            </dl>
             <p data-return-gap className="rounded-lg bg-stone-100 px-3 py-2 font-semibold">
               {returnGap > 0.004
-                ? `${money(returnGap)} comes off your payout.`
+                ? `You pay ${money(returnGap)} of the return delivery yourself.`
                 : returnGap < -0.004
-                  ? `${money(-returnGap)} is added to your payout.`
-                  : "Nothing comes off your payout."}
+                  ? `The customer covers ${money(-returnGap)} more than the return delivery costs.`
+                  : "The customer covers the whole return delivery."}
             </p>
             {returned?.error && (
               <p role="alert" className="text-sm font-semibold text-rose-700">

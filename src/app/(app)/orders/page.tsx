@@ -112,6 +112,9 @@ export default async function OrdersPage({
         status: orders.status,
         payment: orders.payment,
         codAmount: orders.codAmount,
+        total: orders.total,
+        refundSentAt: orders.refundSentAt,
+        deliveredOn: orders.deliveredAt,
         ref: orders.trackingNumber,
         instruction: orders.instruction,
         notes: orders.notes,
@@ -208,6 +211,7 @@ export default async function OrdersPage({
     place: [row.city, row.area].filter(Boolean).join(" · "),
     contents: said(row.id),
     cod: row.payment === "cod" ? formatMoney(row.codAmount, currency) : "Paid",
+    paid: Number(row.payment === "cod" ? row.codAmount : row.total),
     exchange: row.exchangeOfId !== null,
     company: row.company,
     companyId: row.companyId,
@@ -495,9 +499,23 @@ export default async function OrdersPage({
                           order={card(row)}
                         />
                       )}
-                      {row.status === "returned" && Number(row.returnFee) > 0 && (
-                        <span className="mt-1 block text-xs text-stone-500">
-                          Customer pays {formatMoney(row.returnFee, currency)}
+                      {row.status === "returned" && row.deliveredOn && (
+                        <span
+                          className={
+                            "mt-1 block text-xs " +
+                            (row.refundSentAt ? "text-stone-500" : "font-semibold text-amber-700")
+                          }
+                        >
+                          Refund{" "}
+                          {formatMoney(
+                            Math.max(
+                              Number(row.payment === "cod" ? row.codAmount : row.total) -
+                                Number(row.returnFee ?? 0),
+                              0,
+                            ),
+                            currency,
+                          )}
+                          {row.refundSentAt ? " sent" : " to send"}
                         </span>
                       )}
                       {row.status === "cancelled" && row.cancelFee !== null && (

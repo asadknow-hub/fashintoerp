@@ -601,9 +601,10 @@ export async function cancelOrder(
 }
 
 // "Create Return" on a delivered order. The delivery company collects the
-// parcel from the customer: the waybill carries what the customer pays for
-// that (the usual delivery charge, or less if they argued), and the company
-// bills its charge for the trip. The pieces go back into stock one by one on
+// parcel and charges for the trip; that comes off the payout. The customer
+// is paid back by bank transfer, less the part of that delivery cost they
+// agreed to cover: normally all of it, less if they argued, nothing if they
+// insisted on everything back. The pieces go back into stock one by one on
 // the order page, once they have arrived.
 export async function createReturn(
   orderId: string,
@@ -612,10 +613,9 @@ export async function createReturn(
 ): Promise<ActionState> {
   await requireUser();
   if (!isUuid(orderId)) return { error: "Order not found." };
-  const covers = form.get("customerPays") === "on";
-  const fee = covers ? amount(form, "returnFee") : "0.00";
-  if (covers && (text(form, "returnFee") === "" || fee === null)) {
-    return { error: "Enter how much of the delivery cost the customer is covering." };
+  const fee = amount(form, "returnFee");
+  if (text(form, "returnFee") === "" || fee === null) {
+    return { error: "Enter how much of the delivery cost the customer covers (0 if none)." };
   }
   const charge = amount(form, "returnCharge");
   if (text(form, "returnCharge") === "" || charge === null) {
@@ -625,7 +625,12 @@ export async function createReturn(
   try {
     await db.transaction(async (tx) => {
       const [order] = await tx
-        .select({ status: orders.status })
+        .select({
+          status: orders.status,
+          payment: orders.payment,
+          codAmount: orders.codAmount,
+          total: orders.total,
+        })
         .from(orders)
         .where(eq(orders.id, orderId))
         .for("update");
@@ -634,9 +639,19 @@ export async function createReturn(
       if (order.status !== "delivered") {
         throw new StockError("Only a delivered order can be returned. Cancel this one instead.");
       }
+      const paid = Number(order.payment === "cod" ? order.codAmount : order.total);
+      if (Number(fee) > paid + 0.005) {
+        throw new StockError("The customer can't cover more than they paid for the order.");
+      }
       await tx
         .update(orders)
-        .set({ status: "returned", returnedAt: sql`now()`, returnFee: fee, returnCharge: charge })
+        .set({
+          status: "returned",
+          returnedAt: sql`now()`,
+          returnFee: fee,
+          returnCharge: charge,
+          refundSentAt: null,
+        })
         .where(eq(orders.id, orderId));
     });
   } catch (err) {
@@ -645,6 +660,21 @@ export async function createReturn(
   }
   refresh();
   return { ok: "Return created." };
+}
+
+// Ticked on a returned order once the customer's money has been sent back
+// by bank transfer (and unticked if that was a mistake).
+export async function markRefund(orderId: string, sent: boolean): Promise<ActionState> {
+  await requireUser();
+  if (!isUuid(orderId)) return { error: "Order not found." };
+  const [order] = await db
+    .update(orders)
+    .set({ refundSentAt: sent ? sql`now()` : null })
+    .where(and(eq(orders.id, orderId), eq(orders.status, "returned")))
+    .returning({ id: orders.id });
+  if (!order) return { error: "Only a returned order has a refund." };
+  refresh();
+  return { ok: "Saved." };
 }
 
 // What happened to a piece that was on its way back, picked on the order

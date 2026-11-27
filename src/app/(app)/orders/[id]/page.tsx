@@ -33,7 +33,7 @@ import { formatDateTime, formatMoney, isUuid, orderName } from "@/lib/format";
 import { getPrefs } from "@/lib/settings";
 import { saveOrderNote } from "../actions";
 import type { OrderCard } from "../order-actions";
-import { type BackItem, EditOrder, ItemsBack, OutcomeActions } from "./order-parts";
+import { type BackItem, EditOrder, ItemsBack, OutcomeActions, RefundSent } from "./order-parts";
 
 // Everything about the lines of an order that this page shows.
 function itemsOf(orderId: string) {
@@ -128,6 +128,9 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
   const prepaid = order.payment !== "cod";
   // What came off the listed prices to arrive at the COD.
   const discount = prepaid ? 0 : subtotal + delivery - cod;
+  // What the customer paid for the order: its COD, or its value when it was
+  // paid beforehand.
+  const paid = prepaid ? Number(order.total) : cod;
 
   // The delivery company's side: what it collected and what it keeps.
   const wasDelivered =
@@ -138,15 +141,22 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
     payoutLines.push({ label: "Delivery charge", value: -Number(order.deliveryCharge ?? 0) });
   }
   if (order.status === "returned") {
-    if (Number(order.returnFee) > 0) {
-      payoutLines.push({ label: "Return: customer pays", value: Number(order.returnFee) });
-    }
     payoutLines.push({ label: "Return charge", value: -Number(order.returnCharge ?? 0) });
   }
   if (order.status === "cancelled" && order.cancelFee !== null) {
     payoutLines.push({ label: "Opened-parcel charge", value: -Number(order.cancelFee) });
   }
   const payout = payoutLines.reduce((sum, line) => sum + line.value, 0);
+
+  // A return: the customer gets back what they paid, less the part of the
+  // delivery cost they cover. The order then ends as a loss of both delivery
+  // trips, less what the customer covered.
+  const isReturn = order.status === "returned" && wasDelivered;
+  const covered = Number(order.returnFee ?? 0);
+  const refund = Math.max(paid - covered, 0);
+  const firstTrip = Number(order.deliveryCharge ?? 0);
+  const tripBack = Number(order.returnCharge ?? 0);
+  const result = -firstTrip - tripBack + (paid - refund);
 
   /* ---------- Steps ---------- */
 
@@ -170,6 +180,7 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
     place: [order.city, order.area].filter(Boolean).join(" · "),
     contents: items.map((item) => `${item.quantity} ${what(item)}`).join(", "),
     cod: prepaid ? "Paid" : money(cod),
+    paid,
     exchange: order.exchangeOfId !== null,
     company: company?.name ?? null,
     companyId: order.deliveryCompanyId,
@@ -633,12 +644,79 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
                   <dt>{payout < -0.004 ? "Comes off your payout" : "You receive"}</dt>
                   <dd>{money(Math.abs(payout))}</dd>
                 </div>
-                {order.status === "returned" && wasDelivered && (
-                  <p className="mt-2 text-xs text-stone-500">
-                    The COD of {money(cod)} goes back to the customer, so this order is counted as
-                    a loss of {money(cod - payout)} in Reports.
+              </dl>
+            </section>
+          )}
+
+          {/* ---------- Return: the refund and what it cost ---------- */}
+          {isReturn && (
+            <section className="card" data-order-return>
+              <header className={cardHead}>
+                <Undo2 className="size-5 text-brand" />
+                <div>
+                  <h2 className="text-base font-bold">Return Settlement</h2>
+                  <p className="text-xs text-stone-600">
+                    What goes back to the customer, and what this return cost you.
                   </p>
-                )}
+                </div>
+              </header>
+              <dl className="px-4 pb-4 text-sm tabular-nums">
+                <p className="pb-1 text-xs font-bold text-stone-500 uppercase">Customer refund</p>
+                <div className="flex justify-between border-b border-stone-100 py-2">
+                  <dt>Customer paid</dt>
+                  <dd>{money(paid)}</dd>
+                </div>
+                <div className="flex justify-between border-b border-stone-100 py-2">
+                  <dt>
+                    Delivery cost they cover
+                    <span className="block text-xs text-stone-500">
+                      {tripBack - covered > 0.004
+                        ? `of the ${money(tripBack)} return charge; you pay the other ${money(tripBack - covered)}`
+                        : `the whole ${money(tripBack)} return charge`}
+                    </span>
+                  </dt>
+                  <dd className="shrink-0 pl-3 whitespace-nowrap">− {money(covered)}</dd>
+                </div>
+                <div className="mt-1 rounded-lg bg-brand-100 px-3 py-2.5 text-brand-700">
+                  <div className="flex items-center justify-between text-base font-extrabold">
+                    <dt>Refund by bank transfer</dt>
+                    <dd data-refund>{money(refund)}</dd>
+                  </div>
+                  <RefundSent
+                    orderId={order.id}
+                    sentAt={when(order.refundSentAt)}
+                    amount={money(refund)}
+                  />
+                </div>
+
+                <p className="pt-4 pb-1 text-xs font-bold text-stone-500 uppercase">
+                  What this order came to
+                </p>
+                <div className="flex justify-between border-b border-stone-100 py-2">
+                  <dt>Delivery charge (to the customer)</dt>
+                  <dd>− {money(firstTrip)}</dd>
+                </div>
+                <div className="flex justify-between border-b border-stone-100 py-2">
+                  <dt>Return charge (back to you)</dt>
+                  <dd>− {money(tripBack)}</dd>
+                </div>
+                <div className="flex justify-between border-b border-stone-100 py-2">
+                  <dt>Covered by the customer</dt>
+                  <dd>+ {money(paid - refund)}</dd>
+                </div>
+                <div
+                  data-order-result
+                  className={
+                    "mt-1 flex items-center justify-between rounded-lg px-3 py-2.5 text-base font-extrabold " +
+                    (result < -0.004 ? "bg-rose-100 text-rose-700" : "bg-emerald-100 text-emerald-700")
+                  }
+                >
+                  <dt>{result < -0.004 ? "Loss on this order" : "Result of this order"}</dt>
+                  <dd>{money(Math.abs(result))}</dd>
+                </div>
+                <p className="mt-2 text-xs text-stone-500">
+                  This is the figure Reports counts for this order.
+                </p>
               </dl>
             </section>
           )}

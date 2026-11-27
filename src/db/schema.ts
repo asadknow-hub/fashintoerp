@@ -329,12 +329,15 @@ export const orders = pgTable(
     dispatchedAt: timestamp("dispatched_at", { withTimezone: true }),
     deliveredAt: timestamp("delivered_at", { withTimezone: true }),
     deliveryCharge: money("delivery_charge"),
-    // A return (after delivery): when it was made, what the customer pays
-    // on the return waybill, and what the delivery company charges for the
-    // trip. Whatever the customer does not cover comes off the payout.
+    // A return (after delivery). The delivery company charges for the trip
+    // back (returnCharge), which comes off the payout. The customer gets
+    // their money back by bank transfer, less the part of that delivery
+    // cost they agreed to cover (returnFee): usually all of it, sometimes
+    // less, sometimes nothing. refundSentAt is when the transfer was made.
     returnedAt: timestamp("returned_at", { withTimezone: true }),
     returnFee: money("return_fee"),
     returnCharge: money("return_charge"),
+    refundSentAt: timestamp("refund_sent_at", { withTimezone: true }),
     // A cancellation: when, and what the delivery company charged for it
     // (they charge when the customer opened the parcel before refusing it).
     cancelledAt: timestamp("cancelled_at", { withTimezone: true }),

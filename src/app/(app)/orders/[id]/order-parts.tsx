@@ -14,7 +14,7 @@ import {
 import Link from "next/link";
 import { useActionState, useState, useTransition } from "react";
 import { Modal } from "@/components/modal";
-import { editOrder, settleItem } from "../actions";
+import { editOrder, markRefund, settleItem } from "../actions";
 import { type ActionView, type Company, type OrderCard, StepsModal } from "../order-actions";
 
 // The card at the top right of an order: what can be done with it now.
@@ -313,5 +313,64 @@ export function EditOrder({
         </Modal>
       )}
     </>
+  );
+}
+
+// On a returned order: whether the customer's money has been sent back yet,
+// with a button to say so (or to undo it).
+export function RefundSent({
+  orderId,
+  sentAt,
+  amount,
+}: {
+  orderId: string;
+  sentAt: string | null;
+  amount: string;
+}) {
+  const [working, startWork] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const mark = (sent: boolean) =>
+    startWork(async () => {
+      const result = await markRefund(orderId, sent);
+      setError(result?.error ?? null);
+    });
+
+  return (
+    <div data-refund-sent className="mt-1.5 flex flex-wrap items-center gap-2 text-xs font-semibold">
+      {sentAt ? (
+        <>
+          <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-emerald-700">
+            Sent {sentAt}
+          </span>
+          <button
+            type="button"
+            disabled={working}
+            onClick={() => mark(false)}
+            className="cursor-pointer text-brand hover:underline"
+          >
+            Undo
+          </button>
+        </>
+      ) : (
+        <>
+          <span className="rounded-full bg-amber-100 px-2.5 py-1 text-amber-800">Not sent yet</span>
+          <button
+            type="button"
+            disabled={working}
+            onClick={() => {
+              if (window.confirm(`Mark the refund of ${amount} as sent to the customer?`)) mark(true);
+            }}
+            className="btn btn-sm"
+          >
+            Mark as sent
+          </button>
+        </>
+      )}
+      {error && (
+        <span role="alert" className="w-full text-rose-700">
+          {error}
+        </span>
+      )}
+    </div>
   );
 }
