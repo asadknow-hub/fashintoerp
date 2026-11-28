@@ -19,7 +19,11 @@ const extensions: Record<string, string> = {
 // The live site uploads to Vercel Blob instead (see ../upload).
 export async function POST(request: Request) {
   if (mediaMode() !== "local") return new Response("Not found", { status: 404 });
-  if (!(await getUser())) return new Response("Unauthorized", { status: 401 });
+  const user = await getUser();
+  if (!user) return new Response("Unauthorized", { status: 401 });
+  if (user.role === "staff") {
+    return Response.json({ error: "Only an Owner or the System Admin can add photos." }, { status: 403 });
+  }
 
   const file = (await request.formData()).get("file");
   if (!(file instanceof File)) {

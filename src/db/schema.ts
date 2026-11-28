@@ -2,6 +2,7 @@ import { relations, sql } from "drizzle-orm";
 import {
   boolean,
   check,
+  date,
   index,
   integer,
   numeric,
@@ -50,6 +51,9 @@ export const users = pgTable(
     // "admin" is the one System Admin, "owner" a partner. See src/lib/roles.ts.
     role: text("role", { enum: ["admin", "owner", "staff"] }).notNull().default("staff"),
     active: boolean("active").notNull().default(true),
+    // When their screen last checked in: someone seen in the last couple of
+    // minutes is "online". Emptied when they sign out.
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
     createdAt: createdAt(),
   },
   (t) => [
@@ -403,8 +407,40 @@ export const shipperRefClaims = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     seenAt: timestamp("seen_at", { withTimezone: true }).notNull().defaultNow(),
+    // Who the order being typed is for, so two people entering the same
+    // customer's order at the same time can be told about each other.
+    phone: text("phone"),
+    name: text("name"),
   },
   (t) => [primaryKey({ columns: [t.ref, t.userId] })],
+).enableRLS();
+
+// The accounts book: money that went out (rent, packaging, salaries, ads…)
+// or came in apart from orders, each with its date, amount, what it was for
+// and who it was by. Stock purchases are not kept here: they are the
+// purchase batches, and the Accounts page shows both together.
+export const transactions = pgTable(
+  "transactions",
+  {
+    id: id(),
+    // The day it happened (a calendar day, no time of day).
+    day: date("day", { mode: "string" }).notNull(),
+    // "out" = paid out, "in" = received.
+    direction: text("direction", { enum: ["out", "in"] }).notNull().default("out"),
+    amount: money("amount").notNull(),
+    purpose: text("purpose").notNull(),
+    // Which member of staff it was by. The name is kept as well, so the line
+    // still says who if that account is deleted later.
+    byUserId: uuid("by_user_id").references(() => users.id, { onDelete: "set null" }),
+    byName: text("by_name").notNull(),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index("transactions_day_idx").on(t.day),
+    check("transactions_direction_known", sql`${t.direction} IN ('out', 'in')`),
+    check("transactions_amount_positive", sql`${t.amount} > 0`),
+  ],
 ).enableRLS();
 
 export const orderItems = pgTable(

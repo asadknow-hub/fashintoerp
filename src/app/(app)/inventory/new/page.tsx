@@ -1,12 +1,13 @@
 import { FreshOnVisit } from "@/components/fresh-on-visit";
 import { PageHeader } from "@/components/ui";
-import { requireUser } from "@/lib/auth";
+import { requireOwner } from "@/lib/auth";
 import { mediaMode, mediaOffReason } from "@/lib/media";
 import { getPrefs } from "@/lib/settings";
 import { ProductCreator } from "./product-creator";
 
 export default async function NewProductPage() {
-  const [user, { currency }] = await Promise.all([requireUser(), getPrefs()]);
+  // Adding products is for Owners and the System Admin.
+  const [user, { currency }] = await Promise.all([requireOwner(), getPrefs()]);
   return (
     <>
       <PageHeader

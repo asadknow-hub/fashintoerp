@@ -1,6 +1,6 @@
 "use server";
 
-import { type AnyColumn, and, count, eq, gt, inArray, ne, sql } from "drizzle-orm";
+import { type AnyColumn, and, count, eq, gt, inArray, ne, or, sql } from "drizzle-orm";
 import { refresh } from "next/cache";
 import type { ActionState } from "@/components/action-form";
 import { db } from "@/db";
@@ -20,6 +20,7 @@ import { requireUser } from "@/lib/auth";
 import {
   amount,
   cleanPhone,
+  formatDateTime,
   formatMoney,
   isUuid,
   optional,
@@ -736,29 +737,92 @@ export async function lookupCustomer(phoneTyped: string) {
     .where(eq(customers.phone, phone))
     .limit(1);
   if (!customer) return null;
-  const [{ total }] = await db
-    .select({ total: count() })
-    .from(orders)
-    .where(eq(orders.customerId, customer.id));
+  const { timezone } = await getPrefs();
+  const [[{ total }], recent] = await Promise.all([
+    db.select({ total: count() }).from(orders).where(eq(orders.customerId, customer.id)),
+    // Their latest orders, so an order entered twice is easy to spot.
+    db
+      .select({
+        id: orders.id,
+        number: orders.number,
+        ref: orders.trackingNumber,
+        status: orders.status,
+        createdAt: orders.createdAt,
+        by: users.name,
+        // Taken today, by the business's own calendar.
+        today: sql<boolean>`(${orders.createdAt} at time zone ${timezone})::date = (now() at time zone ${timezone})::date`,
+      })
+      .from(orders)
+      .leftJoin(users, eq(users.id, orders.createdBy))
+      .where(eq(orders.customerId, customer.id))
+      .orderBy(sql`${orders.createdAt} desc`)
+      .limit(3),
+  ]);
   return {
     name: customer.name,
+    phone: customer.phone ?? phone,
     phone2: customer.phone2 ?? "",
     country: customer.country ?? "",
     city: customer.city ?? "",
     area: customer.area ?? "",
     street: customer.address ?? "",
     orders: total,
+    recent: recent.map((order) => ({
+      id: order.id,
+      name: orderName(order.ref, order.number),
+      status: statusName[order.status],
+      when: formatDateTime(order.createdAt, timezone),
+      by: order.by,
+      today: order.today,
+    })),
   };
+}
+
+// Customers who already carry the name being typed on the Create Order
+// screen (whatever the capitals). A softer hint than a matching mobile
+// number: two people can share a name.
+export async function lookupName(nameTyped: string) {
+  await requireUser();
+  const name = String(nameTyped ?? "").trim().replace(/\s+/g, " ").slice(0, 120);
+  if (name.length < 3) return [];
+  const rows = await db
+    .select({
+      id: customers.id,
+      name: customers.name,
+      phone: customers.phone,
+      city: customers.city,
+      area: customers.area,
+      orders: sql<number>`count(${orders.id})::int`,
+    })
+    .from(customers)
+    .leftJoin(orders, eq(orders.customerId, customers.id))
+    .where(sql`lower(trim(${customers.name})) = ${name.toLowerCase()}`)
+    .groupBy(customers.id)
+    .orderBy(sql`max(${orders.createdAt}) desc nulls last`)
+    .limit(3);
+  return rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    phone: row.phone ?? "",
+    place: [row.area, row.city].filter(Boolean).join(", "),
+    orders: row.orders,
+  }));
 }
 
 // Called by the Create Order screen while a shipper ref is in the box. It
 // notes that this person is working on that ref, and answers two questions:
 // is the ref already on an order, and is anyone else typing the same one
 // right now?
-export async function watchShipperRef(typed: string) {
+export async function watchShipperRef(typed: string, who?: { phone?: string; name?: string }) {
   const user = await requireUser();
   const ref = cleanRef(String(typed ?? ""));
   if (!/^FO\d{1,12}$/.test(ref)) return null;
+  // Who the order is for, as far as it has been typed: kept with the hold so
+  // that two people entering the same customer's order can be told.
+  const phoneTyped = cleanPhone(String(who?.phone ?? "")).slice(0, 30);
+  const phone = phoneTyped.replace("+", "").length >= 6 ? phoneTyped : null;
+  const nameTyped = String(who?.name ?? "").trim().replace(/\s+/g, " ").toLowerCase().slice(0, 120);
+  const name = nameTyped.length >= 3 ? nameTyped : null;
 
   // One person works on one order at a time: drop their older holds, and
   // anything left behind from long ago.
@@ -770,13 +834,13 @@ export async function watchShipperRef(typed: string) {
     );
   await db
     .insert(shipperRefClaims)
-    .values({ ref, userId: user.id })
+    .values({ ref, userId: user.id, phone, name })
     .onConflictDoUpdate({
       target: [shipperRefClaims.ref, shipperRefClaims.userId],
-      set: { seenAt: sql`now()` },
+      set: { seenAt: sql`now()`, phone, name },
     });
 
-  const [[usedBy], others] = await Promise.all([
+  const [[usedBy], others, alike] = await Promise.all([
     db
       .select({ id: orders.id })
       .from(orders)
@@ -794,11 +858,38 @@ export async function watchShipperRef(typed: string) {
           gt(shipperRefClaims.seenAt, sql`now() - interval '40 seconds'`),
         ),
       ),
+    // Anyone else entering an order for the same mobile number, or for a
+    // customer of the same name, right now.
+    phone || name
+      ? db
+          .select({
+            who: users.name,
+            samePhone: phone ? sql<boolean>`${shipperRefClaims.phone} = ${phone}` : sql<boolean>`false`,
+          })
+          .from(shipperRefClaims)
+          .innerJoin(users, eq(users.id, shipperRefClaims.userId))
+          .where(
+            and(
+              ne(shipperRefClaims.userId, user.id),
+              gt(shipperRefClaims.seenAt, sql`now() - interval '40 seconds'`),
+              or(
+                phone ? eq(shipperRefClaims.phone, phone) : undefined,
+                name ? eq(shipperRefClaims.name, name) : undefined,
+              ),
+            ),
+          )
+      : Promise.resolve([]),
   ]);
   return {
     ref,
     usedBy: usedBy ?? null,
     others: others.map((other) => other.name),
+    // "mobile" is the strong sign that it is the same order; a shared name
+    // alone may be a coincidence.
+    alike: alike.map((other) => ({
+      who: other.who,
+      same: other.samePhone ? ("mobile" as const) : ("name" as const),
+    })),
     // Only needed when this one is taken: the number to move on to.
     next: usedBy ? await nextRefNumber(user.id) : null,
   };

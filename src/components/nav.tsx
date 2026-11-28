@@ -8,20 +8,23 @@ import {
   type LucideIcon,
   Package,
   Settings,
-  ShoppingBag,
   ShoppingCart,
   UserCog,
   Users,
+  Wallet,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useState } from "react";
 
+// `manager` marks what only Owners and the System Admin get: the money of
+// the business, adding products, staff accounts and the activity log.
 type Entry = {
   label: string;
   href: string;
   icon: LucideIcon;
-  items?: { label: string; href: string }[];
+  manager?: boolean;
+  items?: { label: string; href: string; manager?: boolean }[];
 };
 
 const menu: Entry[] = [
@@ -43,23 +46,24 @@ const menu: Entry[] = [
     icon: Package,
     items: [
       { label: "All Products", href: "/products" },
-      { label: "Add Product", href: "/inventory/new" },
+      { label: "Add Product", href: "/inventory/new", manager: true },
       { label: "Low Stock", href: "/inventory?view=low" },
     ],
   },
   {
-    label: "Purchases",
-    href: "/purchases",
-    icon: ShoppingBag,
+    label: "Accounts",
+    href: "/accounts",
+    icon: Wallet,
+    manager: true,
     items: [
-      { label: "All Purchases", href: "/purchases" },
-      { label: "Missing Costs", href: "/purchases?view=missing" },
+      { label: "Transactions", href: "/accounts" },
+      { label: "P&L", href: "/accounts/pnl" },
     ],
   },
   { label: "Customers", href: "/customers", icon: Users },
-  { label: "Reports", href: "/reports", icon: ChartColumn },
-  { label: "Staff", href: "/staff", icon: UserCog },
-  { label: "Activity Log", href: "/activity", icon: History },
+  { label: "Reports", href: "/reports", icon: ChartColumn, manager: true },
+  { label: "Staff", href: "/staff", icon: UserCog, manager: true },
+  { label: "Activity Log", href: "/activity", icon: History, manager: true },
   { label: "Settings", href: "/settings", icon: Settings },
 ];
 
@@ -95,11 +99,9 @@ function place(pathname: string, params: URLSearchParams): Place {
       ? { section: "Products", item: "Low Stock" }
       : { section: "Products", item: "All Products", page: "Stock List" };
   }
-  if (pathname === "/purchases") {
-    return {
-      section: "Purchases",
-      item: params.get("view") === "missing" ? "Missing Costs" : "All Purchases",
-    };
+  if (pathname === "/accounts/pnl") return { section: "Accounts", item: "P&L" };
+  if (pathname.startsWith("/accounts") || pathname === "/purchases") {
+    return { section: "Accounts", item: "Transactions" };
   }
   if (pathname.startsWith("/customers")) return { section: "Customers" };
   if (pathname.startsWith("/reports")) return { section: "Reports" };
@@ -121,8 +123,9 @@ const row =
 const idle = "text-stone-700 hover:bg-stone-200/70 hover:text-stone-900";
 const lit = "bg-brand-100 text-brand";
 
-// `staff` is whether to show the Staff entry: Owners and the System Admin manage staff.
-export function Nav({ staff }: { staff: boolean }) {
+// `manager` is whether an Owner or the System Admin is signed in: they get
+// the entries marked for them.
+export function Nav({ manager }: { manager: boolean }) {
   const here = usePlace();
   // The section you are in is the one that is open. Arrows clicked by hand
   // win until you move to another section.
@@ -137,8 +140,7 @@ export function Nav({ staff }: { staff: boolean }) {
   return (
     <nav className="flex min-h-0 flex-col gap-0.5 overflow-y-auto">
       {menu
-        // Staff accounts and the activity log are for Owners and the System Admin.
-        .filter((entry) => staff || (entry.label !== "Staff" && entry.label !== "Activity Log"))
+        .filter((entry) => manager || !entry.manager)
         .map((entry) => {
         const inside = here.section === entry.label;
         if (!entry.items) {
@@ -179,7 +181,9 @@ export function Nav({ staff }: { staff: boolean }) {
             </div>
             {open && (
               <div className="mt-0.5 mb-1 ml-[21px] flex flex-col gap-0.5 border-l border-stone-300 pl-2.5">
-                {entry.items.map((item) => {
+                {entry.items
+                  .filter((item) => manager || !item.manager)
+                  .map((item) => {
                   const active = inside && here.item === item.label;
                   return (
                     <Link

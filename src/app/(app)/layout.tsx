@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Suspense } from "react";
 import { SignOut } from "@/components/sign-out";
 import { Menu } from "@/components/menu";
+import { Online } from "@/components/online";
 import { Crumbs, Nav } from "@/components/nav";
 import { SearchBox } from "@/components/search-box";
 import { Shell } from "@/components/shell";
@@ -44,6 +45,9 @@ export default function AppLayout({ children }: LayoutProps<"/">) {
           </Suspense>
           <div className="ml-auto flex min-w-0 items-center gap-1.5 max-sm:flex-1">
             <SearchBox />
+            <Suspense>
+              <WhoIsOnline />
+            </Suspense>
             <Suspense fallback={<Bell className="m-1 size-5 text-stone-400" />}>
               <Alerts />
             </Suspense>
@@ -62,7 +66,7 @@ export default function AppLayout({ children }: LayoutProps<"/">) {
 // The menu, with the Staff entry for an Owner or the System Admin.
 async function RoleNav() {
   const user = await requireUser();
-  return <Nav staff={user.role !== "staff"} />;
+  return <Nav manager={user.role !== "staff"} />;
 }
 
 async function BusinessName() {
@@ -132,6 +136,13 @@ async function Alerts() {
       ))}
     </Menu>
   );
+}
+
+// Every screen says "still here" now and then; Owners and the System Admin
+// are also shown who is online.
+async function WhoIsOnline() {
+  const user = await requireUser();
+  return <Online show={user.role !== "staff"} />;
 }
 
 // Who is signed in, with their links.

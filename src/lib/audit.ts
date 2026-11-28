@@ -4,7 +4,15 @@ import { db } from "@/db";
 import { auditLog, orders, products } from "@/db/schema";
 import { orderName } from "./format";
 
-export type AuditArea = "orders" | "stock" | "products" | "staff" | "settings" | "account";
+export type AuditArea =
+  | "orders"
+  | "stock"
+  | "products"
+  | "staff"
+  | "settings"
+  | "account"
+  // The accounts book: money out and in.
+  | "money";
 
 // Writes one line into the record of who did what. It is called after a
 // change has been saved. A problem writing the line must never undo or block

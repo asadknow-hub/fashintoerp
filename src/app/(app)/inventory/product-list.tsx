@@ -26,7 +26,9 @@ export async function ProductList({
   params: Params;
   layout: "gallery" | "table";
 }) {
-  await requireUser();
+  const user = await requireUser();
+  // What the stock cost, and adding products, are for Owners and the System Admin.
+  const manager = user.role !== "staff";
   const q = typeof params.q === "string" ? params.q.trim() : "";
   const view = typeof params.view === "string" ? params.view : "";
   const { currency } = await getPrefs();
@@ -140,10 +142,12 @@ export async function ProductList({
         title={layout === "table" ? "Inventory" : "Products"}
         subtitle={
           layout === "table"
-            ? "How many of each product you have, and what it is worth."
+            ? manager
+              ? "How many of each product you have, and what it is worth."
+              : "How many of each product you have."
             : "Your products at a glance."
         }
-        action={{ href: "/inventory/new", label: "Add product" }}
+        action={manager ? { href: "/inventory/new", label: "Add product" } : undefined}
       />
 
       <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-2">
@@ -182,12 +186,15 @@ export async function ProductList({
         <>
           <dl
             data-totals
-            className="card mb-2 grid grid-cols-3 gap-px overflow-hidden bg-stone-300 text-sm"
+            className={
+              "card mb-2 grid gap-px overflow-hidden bg-stone-300 text-sm " +
+              (manager ? "grid-cols-3" : "grid-cols-2")
+            }
           >
             {[
               ["Products", String(totals.products)],
               ["Units in stock", String(units)],
-              ["Stock value (cost)", formatMoney(value, currency)],
+              ...(manager ? [["Stock value (cost)", formatMoney(value, currency)]] : []),
             ].map(([label, text]) => (
               <div key={label} className="bg-white px-3 py-1.5">
                 <dt className="text-xs text-stone-500">{label}</dt>
@@ -252,7 +259,7 @@ export async function ProductList({
                     <th className="th">Colors</th>
                     <th className="th">Sizes</th>
                     <th className="th text-right">Price</th>
-                    <th className="th text-right">Stock value</th>
+                    {manager && <th className="th text-right">Stock value</th>}
                     <th className="th text-right">In stock</th>
                   </tr>
                 </thead>
@@ -288,9 +295,11 @@ export async function ProductList({
                       <td className="px-4 py-2 text-right text-sm text-stone-600 tabular-nums">
                         {price(row)}
                       </td>
-                      <td className="px-4 py-2 text-right text-sm text-stone-600 tabular-nums">
-                        {formatMoney(row.value, currency)}
-                      </td>
+                      {manager && (
+                        <td className="px-4 py-2 text-right text-sm text-stone-600 tabular-nums">
+                          {formatMoney(row.value, currency)}
+                        </td>
+                      )}
                       <td className="px-4 py-2 text-right text-sm whitespace-nowrap">
                         <span className="mr-2 font-medium tabular-nums">{row.stock}</span>
                         {status(row)}
@@ -303,9 +312,11 @@ export async function ProductList({
                     <td className="px-4 py-2.5" colSpan={5}>
                       Total · {totals.products} {totals.products === 1 ? "product" : "products"}
                     </td>
-                    <td className="px-4 py-2.5 text-right tabular-nums">
-                      {formatMoney(value, currency)}
-                    </td>
+                    {manager && (
+                      <td className="px-4 py-2.5 text-right tabular-nums">
+                        {formatMoney(value, currency)}
+                      </td>
+                    )}
                     <td className="px-4 py-2.5 text-right tabular-nums">{units} units</td>
                   </tr>
                 </tfoot>

@@ -203,7 +203,10 @@ export function MediaManager({
   onTag,
   onRemove,
   onBusy,
+  readOnly = false,
 }: {
+  // Only looking: nothing can be added, retagged or deleted.
+  readOnly?: boolean;
   mode: MediaMode;
   offReason?: string | null;
   folder: string;
@@ -346,7 +349,7 @@ export function MediaManager({
     ? active.reduce((sum, entry) => sum + entry.percent, 0) / active.length
     : 100;
   const lead = waiting[0];
-  const off = mode === "off";
+  const off = mode === "off" || readOnly;
   const dropHere = {
     onDragOver: (event: React.DragEvent) => {
       event.preventDefault();
@@ -419,14 +422,15 @@ export function MediaManager({
                 <TagSelect
                   label="Tag"
                   value={selected.tag}
-                  disabled={working}
+                  disabled={working || readOnly}
                   onChange={(next) => act(() => onTag(selected.id, next))}
                   className="max-w-36 cursor-pointer appearance-none rounded-full bg-black/70 px-2.5 py-1 text-[11px] font-semibold text-white outline-none hover:bg-black/85"
                 />
               </div>
               <button
                 type="button"
-                disabled={working}
+                hidden={readOnly}
+                disabled={working || readOnly}
                 aria-label="Delete this file"
                 title="Delete this file"
                 onClick={() => {
@@ -445,8 +449,10 @@ export function MediaManager({
               <div className="size-full bg-stone-800" />
             )
           ) : off ? (
-            <p className="flex size-full items-center p-4 text-center text-xs text-amber-900">
-              {offReason ?? "File storage isn't connected yet, so uploads are switched off."}
+            <p className="flex size-full items-center justify-center p-4 text-center text-xs text-amber-900">
+              {readOnly
+                ? "No photos yet."
+                : (offReason ?? "File storage isn't connected yet, so uploads are switched off.")}
             </p>
           ) : (
             <button
@@ -541,7 +547,7 @@ export function MediaManager({
           <Bar percent={overall} />
         </div>
       )}
-      {off && items.length > 0 && (
+      {off && !readOnly && items.length > 0 && (
         <p className="mt-2 rounded-lg bg-amber-50 px-2.5 py-2 text-xs text-amber-900">
           {offReason ?? "File storage isn't connected yet, so uploads are switched off."}
         </p>

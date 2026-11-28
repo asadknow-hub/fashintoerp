@@ -79,7 +79,11 @@ export function ProductTop({
   media,
   mode,
   offReason,
+  canEdit,
 }: {
+  // Owners and the System Admin change products; staff only look, and are
+  // not shown what the stock cost.
+  canEdit: boolean;
   product: {
     id: string;
     name: string;
@@ -199,6 +203,8 @@ export function ProductTop({
                 {state.ok}
               </span>
             )}
+            {canEdit && (
+            <>
             <button
               type="button"
               disabled={archiving}
@@ -241,6 +247,8 @@ export function ProductTop({
             >
               <Check className="size-4" /> {saving ? "Saving…" : "Save"}
             </button>
+            </>
+            )}
           </div>
         </div>
       </div>
@@ -251,11 +259,16 @@ export function ProductTop({
           items={media}
           mode={mode}
           offReason={offReason}
+          readOnly={!canEdit}
         />
 
         <section className="card p-4" data-product-info>
           <h2 className="mb-3 text-sm font-bold">Product Information</h2>
-          <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
+          {/* For staff every box here is shown but can't be changed. */}
+          <fieldset
+            disabled={!canEdit}
+            className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]"
+          >
             <div className="space-y-2.5">
               <label className="block">
                 <span className="label">
@@ -418,18 +431,20 @@ export function ProductTop({
                   </tbody>
                 </table>
               </div>
-              <div className="flex items-center gap-3">
-                <Layers className="size-4 shrink-0 text-brand" />
-                <dt className="min-w-0 flex-1 text-xs font-semibold">
-                  Average Purchase Cost
-                </dt>
-                <dd
-                  className="w-36 shrink-0 sm:w-40"
-                  data-metric="average-cost"
-                >
-                  <span className={plain}>{metrics.averageCost}</span>
-                </dd>
-              </div>
+              {canEdit && (
+                <div className="flex items-center gap-3">
+                  <Layers className="size-4 shrink-0 text-brand" />
+                  <dt className="min-w-0 flex-1 text-xs font-semibold">
+                    Average Purchase Cost
+                  </dt>
+                  <dd
+                    className="w-36 shrink-0 sm:w-40"
+                    data-metric="average-cost"
+                  >
+                    <span className={plain}>{metrics.averageCost}</span>
+                  </dd>
+                </div>
+              )}
               <div className="flex items-center gap-3">
                 <Package className="size-4 shrink-0 text-brand" />
                 <dt className="min-w-0 flex-1 text-xs font-semibold">
@@ -441,20 +456,22 @@ export function ProductTop({
                   </span>
                 </dd>
               </div>
-              <div className="flex items-center gap-3">
-                <Coins className="size-4 shrink-0 text-brand" />
-                <dt className="min-w-0 flex-1 text-xs font-semibold">
-                  Total Purchased Value
-                </dt>
-                <dd
-                  className="w-36 shrink-0 sm:w-40"
-                  data-metric="purchased-value"
-                >
-                  <span className={plain}>{metrics.purchasedValue}</span>
-                </dd>
-              </div>
+              {canEdit && (
+                <div className="flex items-center gap-3">
+                  <Coins className="size-4 shrink-0 text-brand" />
+                  <dt className="min-w-0 flex-1 text-xs font-semibold">
+                    Total Purchased Value
+                  </dt>
+                  <dd
+                    className="w-36 shrink-0 sm:w-40"
+                    data-metric="purchased-value"
+                  >
+                    <span className={plain}>{metrics.purchasedValue}</span>
+                  </dd>
+                </div>
+              )}
             </dl>
-          </div>
+          </fieldset>
         </section>
       </div>
     </form>

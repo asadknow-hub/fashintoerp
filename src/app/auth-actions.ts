@@ -11,6 +11,7 @@ import { audit } from "@/lib/audit";
 import {
   createSession,
   destroySession,
+  getUser,
   hashPassword,
   verifyPassword,
 } from "@/lib/auth";
@@ -105,6 +106,9 @@ export async function login(
 // Ends the session. The screen then loads the sign-in page from scratch, so
 // nothing the person had open stays behind for whoever signs in next.
 export async function logout() {
+  // Gone from "who is online" straight away, not after a couple of minutes.
+  const user = await getUser();
+  if (user) await db.update(users).set({ lastSeenAt: null }).where(eq(users.id, user.id));
   await destroySession();
 }
 

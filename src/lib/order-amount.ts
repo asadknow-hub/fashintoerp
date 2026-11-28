@@ -112,7 +112,47 @@ export function periodStart(days: number | null, timezone: string): SQL | null {
   return sql`((date_trunc('day', now() at time zone ${timezone}) - make_interval(days => ${days - 1})) at time zone ${timezone})`;
 }
 
-const within = (at: SQL, since: SQL | null) => (since === null ? sql`true` : sql`${at} >= ${since}`);
+// A stretch of time by name, for the accounts pages: where it starts and
+// (for a month that is over) where it ends, both at midnight in the
+// business's own time zone. Nothing means "no limit on that side".
+export const namedPeriods = [
+  { key: "month", label: "This month" },
+  { key: "last-month", label: "Last month" },
+  { key: "90", label: "Last 90 days" },
+  { key: "year", label: "This year" },
+  { key: "all", label: "All time" },
+] as const;
+export type PeriodKey = (typeof namedPeriods)[number]["key"];
+
+export function periodRange(key: PeriodKey, timezone: string): { from: SQL | null; to: SQL | null } {
+  const startOf = (unit: "month" | "year", back = sql`interval '0'`) =>
+    sql`((date_trunc(${unit}, now() at time zone ${timezone}) - ${back}) at time zone ${timezone})`;
+  switch (key) {
+    case "month":
+      return { from: startOf("month"), to: null };
+    case "last-month":
+      return { from: startOf("month", sql`interval '1 month'`), to: startOf("month") };
+    case "90":
+      return { from: periodStart(90, timezone), to: null };
+    case "year":
+      return { from: startOf("year"), to: null };
+    default:
+      return { from: null, to: null };
+  }
+}
+
+// The same stretch for something kept as a calendar day (no time of day).
+export const dayWithin = (day: SQL, range: { from: SQL | null; to: SQL | null }, timezone: string) =>
+  sql`(
+    ${range.from === null ? sql`true` : sql`${day} >= (${range.from} at time zone ${timezone})::date`}
+    and ${range.to === null ? sql`true` : sql`${day} < (${range.to} at time zone ${timezone})::date`}
+  )`;
+
+const within = (at: SQL, since: SQL | null, until: SQL | null = null) =>
+  sql`(
+    ${since === null ? sql`true` : sql`${at} >= ${since}`}
+    and ${until === null ? sql`true` : sql`${at} < ${until}`}
+  )`;
 
 // The money of a period, each amount counted on the day it happened: an
 // order's COD and delivery charge on the day it was delivered, a return's
@@ -122,19 +162,21 @@ const within = (at: SQL, since: SQL | null) => (since === null ? sql`true` : sql
 // the way the delivery company's own statements have it.
 //
 // The pieces are sums: use them in a select over orders.
-export function periodMoney(since: SQL | null) {
+export function periodMoney(since: SQL | null, until: SQL | null = null) {
   const delivered = sql`(
     ${orders.deliveredAt} is not null and ${orders.status} in ('delivered', 'returned')
-    and ${within(sql`${orders.deliveredAt}`, since)}
+    and ${within(sql`${orders.deliveredAt}`, since, until)}
   )`;
   const returned = sql`(
     ${orders.status} = 'returned'
-    and ${within(sql`coalesce(${orders.returnedAt}, ${orders.deliveredAt}, ${orders.createdAt})`, since)}
+    and ${within(sql`coalesce(${orders.returnedAt}, ${orders.deliveredAt}, ${orders.createdAt})`, since, until)}
   )`;
   const cancelled = sql`(
     ${orders.status} = 'cancelled'
-    and ${within(sql`coalesce(${orders.cancelledAt}, ${orders.createdAt})`, since)}
+    and ${within(sql`coalesce(${orders.cancelledAt}, ${orders.createdAt})`, since, until)}
   )`;
+  // What came in for the delivered orders: their COD, or what was paid beforehand.
+  const sales = sql<string>`coalesce(sum(${orderAmount}) filter (where ${delivered}), 0)`;
   // What the delivery company collected from customers.
   const collected = sql<string>`coalesce(sum(${orders.codAmount}) filter (where ${delivered}), 0)`;
   // What it kept: delivery charges, return charges, opened-parcel fees.
@@ -153,5 +195,16 @@ export function periodMoney(since: SQL | null) {
   const deliveredOrders = sql<number>`(count(*) filter (where ${delivered} and ${orders.status} = 'delivered'))::int`;
   // Orders with anything at all in the period.
   const touched = sql`(${delivered} or ${returned} or ${cancelled})`;
-  return { delivered, returned, cancelled, collected, charges, refunds, income, deliveredOrders, touched };
+  return {
+    delivered,
+    returned,
+    cancelled,
+    sales,
+    collected,
+    charges,
+    refunds,
+    income,
+    deliveredOrders,
+    touched,
+  };
 }

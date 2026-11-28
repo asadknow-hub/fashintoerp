@@ -15,7 +15,11 @@ export async function POST(request: Request) {
       body,
       request,
       onBeforeGenerateToken: async (pathname) => {
-        if (!(await getUser())) throw new Error("Please sign in again.");
+        const user = await getUser();
+        if (!user) throw new Error("Please sign in again.");
+        if (user.role === "staff") {
+          throw new Error("Only an Owner or the System Admin can add photos.");
+        }
         // A picture's name says it is one: then only pictures, at their size.
         const picture = /\.(jpe?g|png|webp|gif|avif)$/i.test(pathname);
         return {

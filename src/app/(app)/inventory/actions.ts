@@ -22,6 +22,11 @@ import { cleanTag } from "@/lib/media-rules";
 import { offerTotal } from "@/lib/offer";
 import { changeStock, StockError } from "@/lib/stock";
 
+// Products, prices and stock are looked after by Owners and the System
+// Admin. Staff can look at them, and can save a fresh count of the shelf for
+// an Owner to use; everything else here is refused for them.
+const NOT_FOR_STAFF = { error: "Only an Owner or the System Admin can do this." };
+
 const code = (value: string, length: number) =>
   value
     .toUpperCase()
@@ -119,6 +124,7 @@ export async function createProduct(
   input: NewProduct,
 ): Promise<{ error: string } | { id: string }> {
   const user = await requireUser();
+  if (user.role === "staff") return NOT_FOR_STAFF;
   const name = typeof input?.name === "string" ? input.name.trim().slice(0, 120) : "";
   const price = money(input?.price);
   let cost = money(input?.cost);
@@ -260,7 +266,7 @@ export async function createProduct(
 // taken off again before saving. Files already attached to a product are
 // left alone.
 export async function discardUpload(url: string, thumbUrl?: string | null): Promise<ActionState> {
-  await requireUser();
+  if ((await requireUser()).role === "staff") return NOT_FOR_STAFF;
   if (typeof url !== "string" || !isOurUrl(url) || !validThumb(thumbUrl)) {
     return { error: "Unknown file." };
   }
@@ -287,6 +293,7 @@ export async function updateProduct(
   form: FormData,
 ): Promise<ActionState> {
   const user = await requireUser();
+  if (user.role === "staff") return NOT_FOR_STAFF;
   if (!isUuid(String(productId))) return { error: "Product not found." };
   const name = text(form, "name");
   const sku = code(text(form, "sku"), 24) || null;
@@ -387,6 +394,7 @@ export async function updateProduct(
 
 export async function setArchived(productId: string, archived: boolean): Promise<ActionState> {
   const user = await requireUser();
+  if (user.role === "staff") return NOT_FOR_STAFF;
   if (!isUuid(String(productId)) || typeof archived !== "boolean") {
     return { error: "Product not found." };
   }
@@ -410,6 +418,7 @@ export async function addVariants(
   form: FormData,
 ): Promise<ActionState> {
   const user = await requireUser();
+  if (user.role === "staff") return NOT_FOR_STAFF;
   const size = optional(form, "size");
   const color = optional(form, "color");
   const stock = text(form, "stock") ? wholeNumber(form, "stock") : 0;
@@ -503,6 +512,7 @@ export async function updateVariants(
   form: FormData,
 ): Promise<ActionState> {
   const user = await requireUser();
+  if (user.role === "staff") return NOT_FOR_STAFF;
   if (!isUuid(String(productId))) return { error: "Product not found." };
   const rows = await db
     .select({ id: variants.id })
@@ -575,6 +585,7 @@ export async function adjustStockGrid(
   form: FormData,
 ): Promise<ActionState> {
   const user = await requireUser();
+  if (user.role === "staff") return NOT_FOR_STAFF;
   const kindName = text(form, "kind");
   if (!isUuid(String(productId))) return { error: "Product not found." };
   if (!Object.hasOwn(adjustments, kindName)) return { error: "Choose what happened." };
@@ -660,6 +671,7 @@ export async function saveBatch(
   form: FormData,
 ): Promise<ActionState> {
   const user = await requireUser();
+  if (user.role === "staff") return NOT_FOR_STAFF;
   if (!isUuid(productId) || (batchId !== null && !isUuid(batchId))) {
     return { error: "That record no longer exists." };
   }
@@ -789,6 +801,7 @@ export async function saveBatch(
 // record has no pieces to take out.)
 export async function deletePurchase(purchaseId: string): Promise<ActionState> {
   const user = await requireUser();
+  if (user.role === "staff") return NOT_FOR_STAFF;
   if (!isUuid(String(purchaseId))) return { error: "That record no longer exists." };
   let removed: { productId: string; note: string | null; units: number } | null = null;
   try {
@@ -955,6 +968,7 @@ export async function saveCount(
 
 export async function deleteCount(countId: string): Promise<ActionState> {
   const user = await requireUser();
+  if (user.role === "staff") return NOT_FOR_STAFF;
   if (!isUuid(String(countId))) return { error: "That count no longer exists." };
   const [gone] = await db
     .delete(stockCounts)
@@ -976,6 +990,7 @@ export async function deleteCount(countId: string): Promise<ActionState> {
 // Only when asked: makes the real stock match what was counted.
 export async function applyCount(countId: string): Promise<ActionState> {
   const user = await requireUser();
+  if (user.role === "staff") return NOT_FOR_STAFF;
   if (!isUuid(String(countId))) return { error: "That count no longer exists." };
 
   try {
@@ -1065,6 +1080,7 @@ export async function addMedia(input: {
   fileName: string | null;
 }): Promise<ActionState> {
   const user = await requireUser();
+  if (user.role === "staff") return NOT_FOR_STAFF;
   const tag = cleanTag(String(input.tag ?? ""));
   if (!isUuid(String(input.productId))) return { error: "Product not found." };
   if (input.kind !== "image" && input.kind !== "video") return { error: "Unknown file type." };
@@ -1102,7 +1118,7 @@ export async function addMedia(input: {
 }
 
 export async function setMediaTag(mediaId: string, value: string): Promise<ActionState> {
-  await requireUser();
+  if ((await requireUser()).role === "staff") return NOT_FOR_STAFF;
   const tag = cleanTag(String(value ?? ""));
   if (!isUuid(String(mediaId)) || !tag) return { error: "Choose a tag." };
   await db.update(productMedia).set({ tag }).where(eq(productMedia.id, mediaId));
@@ -1112,6 +1128,7 @@ export async function setMediaTag(mediaId: string, value: string): Promise<Actio
 
 export async function deleteMedia(mediaId: string): Promise<ActionState> {
   const user = await requireUser();
+  if (user.role === "staff") return NOT_FOR_STAFF;
   if (!isUuid(String(mediaId))) return { error: "Not found." };
   const [removed] = await db
     .delete(productMedia)

@@ -18,6 +18,7 @@ import {
   stockMovements,
   stockPurchaseLines,
   stockPurchases,
+  transactions,
   users,
   variants,
 } from "@/db/schema";
@@ -55,6 +56,7 @@ export async function POST() {
       stock_purchases: await tx.select().from(stockPurchases),
       stock_purchase_lines: await tx.select().from(stockPurchaseLines),
       delivery_companies: await tx.select().from(deliveryCompanies),
+      transactions: await tx.select().from(transactions),
       audit_log: await tx.select().from(auditLog),
       stock_counts: await tx.select().from(stockCounts),
       stock_count_lines: await tx.select().from(stockCountLines),

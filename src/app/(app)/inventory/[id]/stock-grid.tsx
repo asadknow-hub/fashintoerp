@@ -65,7 +65,11 @@ export function StockGrid({
   sizes,
   colors,
   counts,
+  canEdit,
 }: {
+  // Staff can save a fresh count of the shelf; taking stock off, or making
+  // the stock follow a count, is for Owners and the System Admin.
+  canEdit: boolean;
   productId: string;
   variants: GridVariant[];
   sizes: (string | null)[];
@@ -201,7 +205,9 @@ export function StockGrid({
             </span>
           ) : (
             <div className="flex flex-wrap items-center gap-1.5">
-              {(Object.keys(modes) as Mode[]).map((key) => (
+              {(Object.keys(modes) as Mode[])
+                .filter((key) => canEdit || key === "count")
+                .map((key) => (
                 <button
                   key={key}
                   type="button"
@@ -442,7 +448,7 @@ export function StockGrid({
             <h3 className="bg-stone-50 px-4 py-1.5 text-xs font-bold text-stone-700">
               Count snapshots
               <span className="ml-2 font-normal tracking-normal normal-case">
-                A count changes stock only when you press Use as stock.
+                A count changes stock only when {canEdit ? "you press" : "an Owner presses"} Use as stock.
                 Deleting one changes nothing.
               </span>
             </h3>
@@ -493,7 +499,7 @@ export function StockGrid({
                             Edit
                           </button>
                         )}
-                        {!count.applied && (
+                        {canEdit && !count.applied && (
                           <button
                             type="button"
                             disabled={working}
@@ -511,22 +517,24 @@ export function StockGrid({
                             Use as stock
                           </button>
                         )}
-                        <button
-                          type="button"
-                          disabled={working}
-                          onClick={() => {
-                            if (
-                              window.confirm(
-                                "Delete this count? Stock will not change.",
-                              )
-                            ) {
-                              act(() => deleteCount(count.id));
-                            }
-                          }}
-                          className="btn-secondary btn-sm text-rose-700"
-                        >
-                          Delete
-                        </button>
+                        {canEdit && (
+                          <button
+                            type="button"
+                            disabled={working}
+                            onClick={() => {
+                              if (
+                                window.confirm(
+                                  "Delete this count? Stock will not change.",
+                                )
+                              ) {
+                                act(() => deleteCount(count.id));
+                              }
+                            }}
+                            className="btn-secondary btn-sm text-rose-700"
+                          >
+                            Delete
+                          </button>
+                        )}
                       </span>
                     </div>
                     <p className="text-xs text-stone-600 tabular-nums">

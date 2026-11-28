@@ -169,6 +169,13 @@
       "when": 1795874792220,
       "tag": "0023_indexes_and_error_log",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1795878042025,
+      "tag": "0024_accounts_presence",
+      "breakpoints": true
     }
   ]
 }

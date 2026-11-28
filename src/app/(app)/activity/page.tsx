@@ -14,6 +14,7 @@ const areas = [
   { key: "orders", label: "Orders" },
   { key: "stock", label: "Stock" },
   { key: "products", label: "Products" },
+  { key: "money", label: "Accounts" },
   { key: "staff", label: "Staff" },
   { key: "settings", label: "Settings" },
   { key: "account", label: "Sign-ins & passwords" },

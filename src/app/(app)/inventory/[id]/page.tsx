@@ -48,7 +48,10 @@ const reasonLabel = {
 } as const;
 
 export default async function ProductPage({ params }: PageProps<"/inventory/[id]">) {
-  await requireUser();
+  const user = await requireUser();
+  // Owners and the System Admin change products and see what stock cost.
+  // Staff see the product and its stock, and can count the shelf.
+  const canEdit = user.role !== "staff";
   const { id } = await params;
   if (!isUuid(id)) notFound();
 
@@ -235,13 +238,17 @@ export default async function ProductPage({ params }: PageProps<"/inventory/[id]
       tone: "bg-emerald-50 border-emerald-100",
       iconTone: "bg-emerald-100 text-emerald-600",
     },
-    {
-      label: "Inventory Value (at cost)",
-      value: formatMoney(inventoryValue, currency),
-      icon: Coins,
-      tone: "bg-brand-50 border-brand-100",
-      iconTone: "bg-brand-100 text-brand",
-    },
+    ...(canEdit
+      ? [
+          {
+            label: "Inventory Value (at cost)",
+            value: formatMoney(inventoryValue, currency),
+            icon: Coins,
+            tone: "bg-brand-50 border-brand-100",
+            iconTone: "bg-brand-100 text-brand",
+          },
+        ]
+      : []),
   ];
 
   return (
@@ -263,17 +270,22 @@ export default async function ProductPage({ params }: PageProps<"/inventory/[id]
           price4: product.price4 === null ? "" : String(Number(product.price4)),
         }}
         currency={currency}
+        canEdit={canEdit}
         metrics={{
-          averageCost: formatMoney(averageCost, currency),
+          // Costs are not sent to a staff member's screen at all.
+          averageCost: canEdit ? formatMoney(averageCost, currency) : "",
           available: `${available} units`,
-          purchasedValue: formatMoney(paidTotal, currency),
+          purchasedValue: canEdit ? formatMoney(paidTotal, currency) : "",
         }}
         media={media}
         mode={mediaMode()}
         offReason={mediaOffReason()}
       />
 
-      <dl className="grid grid-cols-2 gap-3 lg:grid-cols-4" data-stat-cards>
+      <dl
+        className={"grid grid-cols-2 gap-3 " + (canEdit ? "lg:grid-cols-4" : "lg:grid-cols-3")}
+        data-stat-cards
+      >
         {cards.map((card) => (
           <div key={card.label} className={"flex items-center gap-3 rounded-xl border px-4 py-3 " + card.tone}>
             <span className={"flex size-10 shrink-0 items-center justify-center rounded-lg " + card.iconTone}>
@@ -302,6 +314,8 @@ export default async function ProductPage({ params }: PageProps<"/inventory/[id]
 
       <div className="grid items-start gap-3 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
         <div className="min-w-0 space-y-3">
+          {/* What each batch cost: not for staff. */}
+          {canEdit && (
           <PurchaseBatches
             productId={product.id}
             currency={currency}
@@ -319,8 +333,10 @@ export default async function ProductPage({ params }: PageProps<"/inventory/[id]
                 .map((line) => ({ variantId: line.variantId, quantity: line.quantity })),
             }))}
           />
+          )}
 
           <StockGrid
+            canEdit={canEdit}
             productId={product.id}
             variants={items.map((v) => ({
               id: v.id,
@@ -350,11 +366,15 @@ export default async function ProductPage({ params }: PageProps<"/inventory/[id]
             <dl className="space-y-2 text-sm" data-sales-summary>
               {[
                 { label: "Units Sold", value: String(sold), icon: ShoppingCart },
-                {
-                  label: "Revenue Generated",
-                  value: formatMoney(sales.revenue, currency),
-                  icon: Coins,
-                },
+                ...(canEdit
+                  ? [
+                      {
+                        label: "Revenue Generated",
+                        value: formatMoney(sales.revenue, currency),
+                        icon: Coins,
+                      },
+                    ]
+                  : []),
                 { label: "Remaining Units", value: String(available), icon: PackageCheck },
               ].map((row) => (
                 <div key={row.label} className="flex items-center gap-3">
@@ -410,7 +430,10 @@ export default async function ProductPage({ params }: PageProps<"/inventory/[id]
         </div>
       </div>
 
-      {/* Less-used tools, kept out of the way until opened. */}
+      {/* Less-used tools, kept out of the way until opened. Prices, costs
+          and new sizes or colors are for Owners and the System Admin. */}
+      {canEdit && (
+      <>
       <details className="card group" data-prices>
         <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-bold">
           Prices, SKUs and low-stock alerts for each size and color
@@ -540,6 +563,8 @@ export default async function ProductPage({ params }: PageProps<"/inventory/[id]
           </p>
         </div>
       </details>
+      </>
+      )}
     </div>
   );
 }

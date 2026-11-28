@@ -10,7 +10,9 @@ export function MediaBlock({
   items,
   mode,
   offReason,
+  readOnly = false,
 }: {
+  readOnly?: boolean;
   productId: string;
   items: MediaItem[];
   mode: MediaMode;
@@ -20,6 +22,7 @@ export function MediaBlock({
     <MediaManager
       mode={mode}
       offReason={offReason}
+      readOnly={readOnly}
       folder={`products/${productId}`}
       items={items}
       onAdd={async (item) => (await addMedia({ productId, ...item }))?.error}

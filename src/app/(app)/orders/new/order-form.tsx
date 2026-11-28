@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  ArrowUpRight,
   Building2,
   CalendarDays,
   Check,
@@ -16,8 +17,10 @@ import {
   Search,
   Smartphone,
   Trash2,
+  TriangleAlert,
   User,
   UserRound,
+  Users,
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -32,10 +35,16 @@ import {
 } from "react";
 import type { ActionState } from "@/components/action-form";
 import { colorDot } from "@/lib/colors";
-import { formatMoney, keepPlainDigits, variantLabel } from "@/lib/format";
+import { cleanPhone, formatMoney, keepPlainDigits, variantLabel } from "@/lib/format";
 import { COUNTRIES, DEFAULT_COUNTRY, UAE_AREAS, UAE_CITIES } from "@/lib/locations";
 import { pieceCost } from "@/lib/offer";
-import { createOrder, lookupCustomer, releaseShipperRef, watchShipperRef } from "../actions";
+import {
+  createOrder,
+  lookupCustomer,
+  lookupName,
+  releaseShipperRef,
+  watchShipperRef,
+} from "../actions";
 
 export type OrderVariant = {
   id: string;
@@ -692,6 +701,10 @@ const todayIn = (timezone: string) =>
   }).format(new Date());
 
 type RefNote = NonNullable<Awaited<ReturnType<typeof watchShipperRef>>>;
+// The customer a mobile number already belongs to, with their latest orders.
+type Existing = NonNullable<Awaited<ReturnType<typeof lookupCustomer>>>;
+// Customers who already carry the name that was typed.
+type Namesake = Awaited<ReturnType<typeof lookupName>>[number];
 
 /* ---------- The form ---------- */
 
@@ -786,7 +799,10 @@ function Editor({
   // The description writes itself from the items until someone types their own.
   const [notes, setNotes] = useState(draft?.notes ?? "");
   const [notesAuto, setNotesAuto] = useState(draft ? draft.notesAuto !== false : true);
-  const [known, setKnown] = useState<string | null>(null);
+  // The customer the typed mobile number already belongs to, if any.
+  const [existing, setExisting] = useState<Existing | null>(null);
+  // Customers who already have the typed name (a softer hint).
+  const [namesakes, setNamesakes] = useState<Namesake[]>([]);
   const [, startLookup] = useTransition();
   const [state, run, pending] = useActionState(createOrder, null);
 
@@ -837,6 +853,10 @@ function Editor({
     refAuto,
   ]);
 
+  // Who the order is for, as typed so far.
+  const forPhone = customer.phone.trim();
+  const forName = customer.name.trim().replace(/\s+/g, " ");
+
   // While a shipper ref is in the box, keep asking the system about it: is
   // it already on an order, and is someone else typing the same one? Asking
   // also tells the system that this person is working on it.
@@ -845,7 +865,7 @@ function Editor({
     let stopped = false;
     const ask = async () => {
       try {
-        const note = await watchShipperRef(fullRef);
+        const note = await watchShipperRef(fullRef, { phone: forPhone, name: forName });
         if (stopped) return;
         // A number the system suggested that got used meanwhile: move on to
         // the next free one. A typed number is left for the person to change.
@@ -864,8 +884,26 @@ function Editor({
       clearTimeout(first);
       clearInterval(again);
     };
-  }, [fullRef, refAuto]);
+  }, [fullRef, refAuto, forPhone, forName]);
   const refNow = refNote && refNote.ref === fullRef ? refNote : null;
+
+  // Does a customer with the typed name exist already? Asked a moment after
+  // the typing stops.
+  useEffect(() => {
+    let stopped = false;
+    const timer = setTimeout(async () => {
+      try {
+        const found = forName.length >= 3 ? await lookupName(forName) : [];
+        if (!stopped) setNamesakes(found);
+      } catch {
+        // Only a hint: nothing is lost without it.
+      }
+    }, 500);
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+  }, [forName]);
 
   const startOver = () => {
     if (fullRef) void releaseShipperRef().catch(() => {});
@@ -883,7 +921,8 @@ function Editor({
     setInstruction(usualInstruction);
     setNotes("");
     setNotesAuto(true);
-    setKnown(null);
+    setExisting(null);
+    setNamesakes([]);
     setRestored(false);
     // Such an order never used the saved draft, so it must not clear one.
     if (!fromChat) writeDraft(draftKey, null);
@@ -1073,9 +1112,10 @@ function Editor({
                   ? "The order date can't be in the future."
                   : null;
 
-  const findCustomer = () =>
+  // `phone` is given when the number is put in by a button rather than typed.
+  const findCustomer = (phone = customer.phone) =>
     startLookup(async () => {
-      const found = await lookupCustomer(customer.phone);
+      const found = await lookupCustomer(phone);
       // A box is filled in when it is empty, or still holds what the last
       // lookup put there (the number was corrected): what a person typed
       // themselves is never replaced.
@@ -1100,11 +1140,84 @@ function Editor({
             }
           : {},
       );
-      if (!found) return setKnown(null);
-      setKnown(
-        `Returning customer: ${found.name} · ${found.orders} earlier ${found.orders === 1 ? "order" : "orders"}`,
-      );
+      setExisting(found);
     });
+
+  // Other staff entering an order for the same customer right now.
+  const alike = refNow?.alike ?? [];
+  // A matching mobile only counts while that number is still in the box.
+  const stillTheirs = existing && cleanPhone(forPhone) === cleanPhone(existing.phone);
+  const differentName =
+    !!stillTheirs && forName !== "" && forName.toLowerCase() !== existing.name.trim().toLowerCase();
+  // People with the typed name, other than the one the mobile already found.
+  const otherNamesakes = namesakes.filter(
+    (person) => !(stillTheirs && cleanPhone(person.phone) === cleanPhone(existing.phone)),
+  );
+
+  // What still stops the order from being created, and where on the screen
+  // that is: the text under the Create Order button is a button that goes there.
+  const holdAt = blocked
+    ? "line"
+    : ready.length === 0
+      ? "product"
+      : !shipperRef
+        ? "ref"
+        : !customer.name.trim()
+          ? "name"
+          : !customer.phone.trim()
+            ? "phone"
+            : !customer.country || !customer.city || !customer.area
+              ? "place"
+              : codWrong || (defaults.exchange && cod.trim() === "")
+                ? "cod"
+                : refNow?.usedBy
+                  ? "ref"
+                  : "date";
+  const goToHold = (form: HTMLFormElement | null) => {
+    if (!form) return;
+    const find = (selector: string) => form.querySelector<HTMLElement>(selector);
+    let target: HTMLElement | null = null;
+    if (holdAt === "line") {
+      const line = find("[data-line][data-problem]");
+      const problem = line?.dataset.problem;
+      target =
+        problem === "choose"
+          ? ([...(line?.querySelectorAll<HTMLSelectElement>("select") ?? [])].find(
+              (select) => !select.disabled && select.value === "",
+            ) ?? null)
+          : problem === "price"
+            ? (line?.querySelector<HTMLElement>('input[aria-label="Unit Price"]') ?? null)
+            : (line?.querySelector<HTMLElement>('input[aria-label="Quantity"]') ?? null);
+      target ??= line;
+    } else {
+      target = find(
+        {
+          product: '[data-line] input[aria-label="Product"]',
+          ref: 'input[aria-label="Shipper Ref"]',
+          name: "input[name=name]",
+          phone: "input[name=phone]",
+          place: !customer.country
+            ? 'select[aria-label="Country"]'
+            : !customer.city
+              ? '[aria-label="City"]'
+              : '[aria-label="Area"]',
+          cod: 'input[aria-label="COD"]',
+          date: 'input[aria-label="Order Date"]',
+        }[holdAt],
+      );
+    }
+    if (!target) return;
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+    target.focus({ preventScroll: true });
+    // A red pulse around it, so the eye lands on the right box.
+    (target.closest("[data-pulse]") ?? target).animate(
+      [
+        { boxShadow: "0 0 0 4px rgba(225, 29, 72, 0.55)" },
+        { boxShadow: "0 0 0 0 rgba(225, 29, 72, 0)" },
+      ],
+      { duration: 1500 },
+    );
+  };
 
   const inUae = customer.country === DEFAULT_COUNTRY;
   const set = (change: Partial<Customer>) => setCustomer((current) => ({ ...current, ...change }));
@@ -1269,12 +1382,11 @@ function Editor({
                   inputMode="tel"
                   value={customer.phone}
                   onChange={(event) => set({ phone: event.target.value })}
-                  onBlur={findCustomer}
+                  onBlur={() => findCustomer()}
                   placeholder="Mobile Number"
                   className={inside}
                 />
               </IconBox>
-              {known && <span className="mt-1 block text-xs text-emerald-700">{known}</span>}
             </label>
             <label className="block">
               <Label>Mobile 2 (Optional)</Label>
@@ -1290,6 +1402,133 @@ function Editor({
               </IconBox>
             </label>
           </div>
+
+          {/* ---------- Is this customer, or this very order, already known? ---------- */}
+          {(alike.length > 0 || stillTheirs || otherNamesakes.length > 0) && (
+            <div className="space-y-2" data-customer-notices>
+              {/* Another member of staff is entering it right now. */}
+              {alike.map((other) => (
+                <p
+                  key={other.who + other.same}
+                  data-alike={other.same}
+                  className={
+                    "flex items-start gap-2.5 rounded-lg border px-3 py-2 text-sm " +
+                    (other.same === "mobile"
+                      ? "border-rose-300 bg-rose-50 font-semibold text-rose-800"
+                      : "border-amber-300 bg-amber-50 text-amber-900")
+                  }
+                >
+                  <Users className="mt-0.5 size-4 shrink-0" />
+                  <span>
+                    {other.same === "mobile"
+                      ? `${other.who} is entering an order for this same mobile number right now. Check with them before you go on: it may be the same order.`
+                      : `${other.who} is entering an order for a customer with the same name right now. It may be the same order: check with them.`}
+                  </span>
+                </p>
+              ))}
+
+              {/* The mobile number belongs to a customer already: a strong sign. */}
+              {stillTheirs && (
+                <div
+                  data-existing-customer
+                  className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5 text-sm text-amber-950"
+                >
+                  <p className="flex items-start gap-2.5 font-semibold">
+                    <TriangleAlert className="mt-0.5 size-4 shrink-0 text-amber-600" />
+                    <span>
+                      This mobile number already belongs to a customer: {existing.name} ·{" "}
+                      {existing.orders === 0
+                        ? "no orders yet"
+                        : `${existing.orders} earlier ${existing.orders === 1 ? "order" : "orders"}`}
+                      . Are you sure it is the same person?
+                    </span>
+                  </p>
+                  {differentName && (
+                    <p className="mt-1.5 pl-6.5" data-name-differs>
+                      You typed <b>“{forName}”</b>, but this number is saved as{" "}
+                      <b>“{existing.name}”</b>. If it is the same person, saving will rename them. If
+                      it is someone else, check the number.{" "}
+                      <button
+                        type="button"
+                        onClick={() => set({ name: existing.name })}
+                        className="cursor-pointer font-semibold text-brand underline"
+                      >
+                        Use the saved name
+                      </button>
+                    </p>
+                  )}
+                  {existing.recent.some((order) => order.today) && (
+                    <p
+                      data-ordered-today
+                      className="mt-1.5 rounded-md bg-rose-100 px-2.5 py-1.5 font-semibold text-rose-800"
+                    >
+                      An order for this number was already made today. Make sure you are not
+                      entering the same order twice.
+                    </p>
+                  )}
+                  {existing.recent.length > 0 && (
+                    <ul className="mt-1.5 space-y-0.5 pl-6.5 text-xs" data-recent-orders>
+                      {existing.recent.map((order) => (
+                        <li key={order.id}>
+                          <Link
+                            href={`/orders/${order.id}`}
+                            target="_blank"
+                            className="font-bold text-brand underline"
+                          >
+                            {order.name}
+                          </Link>{" "}
+                          · {order.when} · {order.status}
+                          {order.by ? ` · by ${order.by}` : ""}
+                          {order.today && <b className="text-rose-700"> · today</b>}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+
+              {/* Only the name is the same: a soft hint, names repeat. */}
+              {otherNamesakes.length > 0 && (
+                <div
+                  data-namesakes
+                  className="rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-sm text-stone-700"
+                >
+                  <p className="flex items-start gap-2.5">
+                    <User className="mt-0.5 size-4 shrink-0 text-stone-500" />
+                    <span>
+                      {otherNamesakes.length === 1
+                        ? "A customer with this name already exists. Same person?"
+                        : `${otherNamesakes.length} customers with this name already exist. One of them?`}
+                    </span>
+                  </p>
+                  <ul className="mt-1 space-y-0.5 pl-6.5 text-xs">
+                    {otherNamesakes.map((person) => (
+                      <li key={person.id} className="flex flex-wrap items-center gap-x-2">
+                        <span>
+                          <b>{person.name}</b>
+                          {person.phone ? ` · ${person.phone}` : ""}
+                          {person.place ? ` · ${person.place}` : ""} · {person.orders}{" "}
+                          {person.orders === 1 ? "order" : "orders"}
+                        </span>
+                        {person.phone && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              set({ phone: person.phone });
+                              findCustomer(person.phone);
+                            }}
+                            className="cursor-pointer font-semibold text-brand underline"
+                          >
+                            Yes, use their details
+                          </button>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-[1fr_2fr]">
             <label className="block">
@@ -1451,6 +1690,7 @@ function Editor({
                   <div
                     key={row.key}
                     data-line
+                    data-problem={problem ?? undefined}
                     className={"rounded-lg " + (red ? "bg-rose-50 p-2 ring-1 ring-rose-200" : "")}
                   >
                     <div className={columns}>
@@ -1487,8 +1727,13 @@ function Editor({
                         return (
                           <span
                             key={part}
+                            data-pulse
                             className={
-                              "relative flex h-10 items-center rounded-lg border border-stone-200 focus-within:border-brand focus-within:ring-1 focus-within:ring-brand " +
+                              "relative flex h-10 items-center rounded-lg border focus-within:border-brand focus-within:ring-1 focus-within:ring-brand " +
+                              // Still to be chosen: this is the box "marked in red".
+                              (product && chosen === undefined
+                                ? "border-rose-500 ring-1 ring-rose-200 "
+                                : "border-stone-200 ") +
                               (!product || single ? "bg-stone-100" : "bg-white")
                             }
                           >
@@ -1833,14 +2078,21 @@ function Editor({
             </p>
           )}
           {hold && (
-            <p
+            <button
+              type="button"
               data-hold
+              title="Take me there"
+              onClick={(event) => goToHold(event.currentTarget.form)}
               className={
-                "mt-2 max-w-64 text-xs " + (blocked ? "font-semibold text-rose-700" : "text-stone-500")
+                "mt-2 flex max-w-64 cursor-pointer items-start gap-1.5 rounded-lg border px-2.5 py-1.5 text-left text-xs font-semibold transition " +
+                (blocked
+                  ? "border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100"
+                  : "border-stone-200 bg-white text-stone-700 hover:border-brand hover:text-brand")
               }
             >
-              {hold}
-            </p>
+              <span>{hold}</span>
+              <ArrowUpRight className="mt-px size-3.5 shrink-0" />
+            </button>
           )}
         </div>
       </div>

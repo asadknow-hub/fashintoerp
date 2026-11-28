@@ -20,7 +20,7 @@ import {
   stockPurchases,
   variants,
 } from "@/db/schema";
-import { requireUser } from "@/lib/auth";
+import { requireOwner } from "@/lib/auth";
 import { formatMoney } from "@/lib/format";
 import {
   countsAsSale,
@@ -43,7 +43,8 @@ const periods = [
 // on the shelf is worth.
 export default async function ReportsPage({ searchParams }: PageProps<"/reports">) {
   const [, params, { currency, timezone }] = await Promise.all([
-    requireUser(),
+    // The money of the business is for Owners and the System Admin.
+    requireOwner(),
     searchParams,
     getPrefs(),
   ]);
@@ -204,7 +205,7 @@ export default async function ReportsPage({ searchParams }: PageProps<"/reports"
       icon: PiggyBank,
       tone: "bg-amber-50 border-amber-100",
       iconTone: "bg-amber-100 text-amber-600",
-      href: "/purchases",
+      href: "/accounts?kind=stock",
     },
     {
       label: "Units Sold",
@@ -306,8 +307,8 @@ export default async function ReportsPage({ searchParams }: PageProps<"/reports"
         <Block title="Money in stock" icon={<Coins />}>
           <dl className="space-y-2 text-sm">
             {[
-              ["Total paid for stock", formatMoney(paid.total, currency), "/purchases"],
-              ["Units purchased", String(paid.units), "/purchases"],
+              ["Total paid for stock", formatMoney(paid.total, currency), "/accounts?kind=stock"],
+              ["Units purchased", String(paid.units), "/accounts?kind=stock"],
               ["Inventory value (at cost)", formatMoney(stock.cost, currency), "/inventory"],
               ["Inventory value (at selling price)", formatMoney(stock.selling, currency), "/inventory"],
               ["Items low or out of stock", String(low.items), "/inventory?view=low"],

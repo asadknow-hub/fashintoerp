@@ -108,10 +108,17 @@ export default async function DashboardPage() {
       : [];
 
   const stats = [
+    // What the orders brought in is for Owners and the System Admin; staff
+    // see how many were taken.
     {
-      label: "Sales, last 7 days",
-      value: formatMoney(sales.total, currency),
-      note: sales.count === 1 ? "1 order" : `${sales.count} orders`,
+      label: user.role === "staff" ? "Orders, last 7 days" : "Sales, last 7 days",
+      value: user.role === "staff" ? String(sales.count) : formatMoney(sales.total, currency),
+      note:
+        user.role === "staff"
+          ? "Taken in the last 7 days"
+          : sales.count === 1
+            ? "1 order"
+            : `${sales.count} orders`,
       href: "/orders",
       icon: TrendingUp,
       tone: "bg-brand-50 border-brand-100",
