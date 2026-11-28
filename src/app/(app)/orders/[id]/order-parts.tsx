@@ -316,6 +316,9 @@ export function EditOrder({
     if (gone?.go && !left.current) {
       left.current = true;
       router.push(gone.go);
+      // The list may have been opened before: fetch it afresh, without the
+      // order that is gone.
+      router.refresh();
     }
   }, [gone, router]);
 

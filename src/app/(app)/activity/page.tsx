@@ -1,8 +1,8 @@
-import { and, count, desc, eq, ilike, or, sql } from "drizzle-orm";
+import { and, count, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import Link from "next/link";
 import { Empty, PageHeader, pageNumber, Pager } from "@/components/ui";
 import { db } from "@/db";
-import { auditLog } from "@/db/schema";
+import { auditLog, errorLog, orders } from "@/db/schema";
 import { requireOwner } from "@/lib/auth";
 import { formatDateTime, likeTerm } from "@/lib/format";
 import { getPrefs } from "@/lib/settings";
@@ -22,7 +22,7 @@ const areas = [
 // Who did what, and when: every change made in the system, newest first.
 // Only Owners and the System Admin can see it.
 export default async function ActivityPage({ searchParams }: PageProps<"/activity">) {
-  const [, params, { timezone }] = await Promise.all([requireOwner(), searchParams, getPrefs()]);
+  const [me, params, { timezone }] = await Promise.all([requireOwner(), searchParams, getPrefs()]);
   const one = (key: string) => (typeof params[key] === "string" ? (params[key] as string).trim() : "");
   const area = areas.some((option) => option.key === one("area")) ? one("area") : "";
   const who = one("who");
@@ -49,6 +49,31 @@ export default async function ActivityPage({ searchParams }: PageProps<"/activit
       .orderBy(sql`1`),
   ]);
 
+  // Orders that were deleted since can't be opened any more.
+  const orderIds = [...new Set(rows.flatMap((row) => (row.orderId ? [row.orderId] : [])))];
+  const stillThere = new Set(
+    orderIds.length
+      ? (await db.select({ id: orders.id }).from(orders).where(inArray(orders.id, orderIds))).map(
+          (order) => order.id,
+        )
+      : [],
+  );
+
+  // For the System Admin: what went wrong on the server lately.
+  const problemsView = me.role === "admin" && params.view === "problems";
+  const [[{ lately }], problems] =
+    me.role === "admin"
+      ? await Promise.all([
+          db
+            .select({ lately: count() })
+            .from(errorLog)
+            .where(sql`${errorLog.at} > now() - interval '24 hours'`),
+          problemsView
+            ? db.select().from(errorLog).orderBy(desc(errorLog.at)).limit(200)
+            : Promise.resolve([]),
+        ])
+      : [[{ lately: 0 }], []];
+
   const href = (changes: { area?: string; who?: string; page?: number }) => {
     const query = new URLSearchParams();
     const nextArea = changes.area ?? area;
@@ -74,10 +99,19 @@ export default async function ActivityPage({ searchParams }: PageProps<"/activit
       <div className="mb-2 flex flex-wrap items-center gap-3">
         <div className="flex flex-wrap gap-1" data-activity-areas>
           {areas.map((option) => (
-            <Link key={option.key} href={href({ area: option.key })} className={pill(area === option.key)}>
+            <Link
+              key={option.key}
+              href={href({ area: option.key })}
+              className={pill(!problemsView && area === option.key)}
+            >
               {option.label}
             </Link>
           ))}
+          {me.role === "admin" && (
+            <Link href="/activity?view=problems" data-problems-link className={pill(problemsView)}>
+              Problems{lately > 0 ? ` (${lately} today)` : ""}
+            </Link>
+          )}
         </div>
         <form className="ml-auto flex flex-wrap gap-2">
           {area && <input type="hidden" name="area" value={area} />}
@@ -99,7 +133,40 @@ export default async function ActivityPage({ searchParams }: PageProps<"/activit
         </form>
       </div>
 
-      {rows.length === 0 ? (
+      {problemsView ? (
+        problems.length === 0 ? (
+          <Empty title="No problems recorded">
+            When a page fails to load or a save crashes, it is listed here.
+          </Empty>
+        ) : (
+          <div className="card overflow-x-auto" data-problems>
+            <table className="w-full text-[13px] leading-snug">
+              <thead className="border-b border-stone-200">
+                <tr>
+                  <th className="th w-px whitespace-nowrap">When</th>
+                  <th className="th w-px whitespace-nowrap">Where</th>
+                  <th className="th">What went wrong</th>
+                  <th className="th w-px whitespace-nowrap">Code</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-stone-100">
+                {problems.map((problem) => (
+                  <tr key={problem.id} className="align-top">
+                    <td className="td whitespace-nowrap text-stone-600">
+                      {formatDateTime(problem.at, timezone)}
+                    </td>
+                    <td className="td font-mono text-xs break-all">{problem.path}</td>
+                    <td className="td break-words">{problem.message}</td>
+                    <td className="td font-mono text-xs whitespace-nowrap text-stone-500">
+                      {problem.digest ?? ""}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
+      ) : rows.length === 0 ? (
         <Empty title={q || area || who ? "Nothing found" : "Nothing has been recorded yet"}>
           {!q && !area && !who && "Changes made from now on will show up here."}
         </Empty>
@@ -122,7 +189,7 @@ export default async function ActivityPage({ searchParams }: PageProps<"/activit
                   </td>
                   <td className="td font-semibold whitespace-nowrap">{row.userName}</td>
                   <td className="td font-semibold whitespace-nowrap">
-                    {row.orderId && row.action !== "order.deleted" ? (
+                    {row.orderId && stillThere.has(row.orderId) ? (
                       <Link href={`/orders/${row.orderId}`} className="text-brand hover:underline">
                         {row.subject}
                       </Link>
@@ -141,7 +208,9 @@ export default async function ActivityPage({ searchParams }: PageProps<"/activit
           </table>
         </div>
       )}
-      <Pager page={page} pageSize={PAGE_SIZE} total={total} href={(target) => href({ page: target })} />
+      {!problemsView && (
+        <Pager page={page} pageSize={PAGE_SIZE} total={total} href={(target) => href({ page: target })} />
+      )}
     </>
   );
 }

@@ -383,6 +383,9 @@ export async function createOrder(
     orderId,
   });
   // The screen clears its saved draft, then opens the new order.
+  // Lists opened before now (and reached again with the Back button) are
+  // fetched afresh, so the new order is on them.
+  refresh();
   return { go: `/orders/${orderId}` };
 }
 
@@ -684,6 +687,8 @@ export async function deleteOrder(
     throw err;
   }
   await audit(user, { area: "orders", action: "order.deleted", ...gone, orderId });
+  // (The list is refreshed by the screen once it has left this order's
+  // page: refreshing here would redraw a page whose order is gone.)
   return { go: "/orders" };
 }
 

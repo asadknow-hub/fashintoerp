@@ -86,6 +86,7 @@ export default async function DashboardPage() {
         backupDue: sql<boolean>`(select ${settings.lastBackupAt} is null or ${settings.lastBackupAt} < now() - interval '7 days' from ${settings} limit 1)`,
         hasData: sql<boolean>`exists (select 1 from ${products})`,
         hasCode: sql<boolean>`${users.recoveryHash} is not null`,
+        problems: sql<number>`(select count(*)::int from error_log where at > now() - interval '24 hours')`,
       })
       .from(users)
       .where(eq(users.id, user.id)),
@@ -98,6 +99,10 @@ export default async function DashboardPage() {
             : null,
           care && !care.hasCode
             ? "You have no recovery code, so a forgotten password could lock you out."
+            : null,
+          // Only the System Admin is told that something broke.
+          user.role === "admin" && care && care.problems > 0
+            ? `Something went wrong ${care.problems === 1 ? "once" : `${care.problems} times`} in the last 24 hours. See Activity Log → Problems.`
             : null,
         ].filter((text) => text !== null)
       : [];

@@ -20,7 +20,10 @@ export function OrderBoard({
   cards,
   companies,
   currency,
+  hidden = 0,
 }: {
+  // Orders that did not fit on the board (the newest delivered ones go first).
+  hidden?: number;
   cards: OrderCard[];
   companies: Company[];
   currency: string;
@@ -32,6 +35,15 @@ export function OrderBoard({
 
   return (
     <>
+      {hidden > 0 && (
+        <p
+          data-board-more
+          className="card mb-2 border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+        >
+          {hidden} more {hidden === 1 ? "order is" : "orders are"} not shown here: the board holds
+          the orders still on their way first. Use the list to see everything.
+        </p>
+      )}
       <div
         data-board
         className="grid grid-flow-col auto-cols-[minmax(15.5rem,1fr)] gap-3 overflow-x-auto pb-2"

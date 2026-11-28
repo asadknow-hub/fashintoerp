@@ -46,7 +46,7 @@ export function LoadError({ error, retry }: { error: unknown; retry: () => void 
         <p className="mt-1 text-sm text-stone-600">
           {waiting
             ? "The system was busy for a moment. Trying again…"
-            : "It is still not loading. Nothing you typed elsewhere is lost. Check your internet and try again."}
+            : "It is still not loading. If you were saving something, check whether it was saved before doing it again. Then check your internet and try again."}
         </p>
         <button
           type="button"

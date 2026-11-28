@@ -162,6 +162,13 @@
       "when": 1795874285140,
       "tag": "0022_unit_cost",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1795874792220,
+      "tag": "0023_indexes_and_error_log",
+      "breakpoints": true
     }
   ]
 }

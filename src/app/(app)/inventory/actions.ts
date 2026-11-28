@@ -252,6 +252,7 @@ export async function createProduct(
     summary: `Added the product with ${rows.length} sizes and colors and ${pieces} pieces of opening stock`,
     productId,
   });
+  refresh();
   return { id: productId };
 }
 

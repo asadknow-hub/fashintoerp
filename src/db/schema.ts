@@ -38,18 +38,28 @@ export const settings = pgTable("settings", {
 /* ---------- Team & login ---------- */
 
 
-export const users = pgTable("users", {
-  id: id(),
-  name: text("name").notNull(),
-  email: text("email").notNull().unique(),
-  passwordHash: text("password_hash").notNull(),
-  // Scrambled one-time code for getting back in after a forgotten password.
-  recoveryHash: text("recovery_hash"),
-  // "admin" is the one System Admin, "owner" a partner. See src/lib/roles.ts.
-  role: text("role", { enum: ["admin", "owner", "staff"] }).notNull().default("staff"),
-  active: boolean("active").notNull().default(true),
-  createdAt: createdAt(),
-}).enableRLS();
+export const users = pgTable(
+  "users",
+  {
+    id: id(),
+    name: text("name").notNull(),
+    email: text("email").notNull().unique(),
+    passwordHash: text("password_hash").notNull(),
+    // Scrambled one-time code for getting back in after a forgotten password.
+    recoveryHash: text("recovery_hash"),
+    // "admin" is the one System Admin, "owner" a partner. See src/lib/roles.ts.
+    role: text("role", { enum: ["admin", "owner", "staff"] }).notNull().default("staff"),
+    active: boolean("active").notNull().default(true),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    check("users_role_known", sql`${t.role} IN ('admin', 'owner', 'staff')`),
+    // There is only ever one System Admin.
+    uniqueIndex("users_one_admin")
+      .on(sql`(true)`)
+      .where(sql`${t.role} = 'admin'`),
+  ],
+).enableRLS();
 
 export const sessions = pgTable(
   "sessions",
@@ -368,6 +378,16 @@ export const orders = pgTable(
     uniqueIndex("orders_number_idx").on(t.number),
     index("orders_customer_idx").on(t.customerId),
     index("orders_status_idx").on(t.status),
+    // One FO number, one order (whatever the letter case).
+    uniqueIndex("orders_ref_unique")
+      .on(sql`upper(${t.trackingNumber})`)
+      .where(sql`${t.trackingNumber} IS NOT NULL`),
+    // The lists show the newest first.
+    index("orders_created_idx").on(t.createdAt.desc(), t.id),
+    // "Which order replaced this one?" is asked for every row of a list.
+    index("orders_exchange_of_idx")
+      .on(t.exchangeOfId)
+      .where(sql`${t.exchangeOfId} IS NOT NULL`),
   ],
 ).enableRLS();
 
@@ -413,7 +433,10 @@ export const orderItems = pgTable(
     backState: text("back_state"),
     backAt: timestamp("back_at", { withTimezone: true }),
   },
-  (t) => [index("order_items_order_idx").on(t.orderId)],
+  (t) => [
+    index("order_items_order_idx").on(t.orderId),
+    index("order_items_variant_idx").on(t.variantId),
+  ],
 ).enableRLS();
 
 // The record of who did what and when: every change made in the system
@@ -437,7 +460,28 @@ export const auditLog = pgTable(
     orderId: uuid("order_id"),
     productId: uuid("product_id"),
   },
-  (t) => [index("audit_log_at_idx").on(t.at), index("audit_log_order_idx").on(t.orderId)],
+  (t) => [
+    index("audit_log_at_idx").on(t.at),
+    index("audit_log_order_idx").on(t.orderId),
+    index("audit_log_area_idx").on(t.area, t.at),
+  ],
+).enableRLS();
+
+// Things that went wrong on the server (a page or a save that failed), kept
+// so the System Admin can see that something broke and when. Old lines are
+// cleared by themselves.
+export const errorLog = pgTable(
+  "error_log",
+  {
+    id: id(),
+    at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
+    // The page or action it happened on, and what the error said.
+    path: text("path").notNull(),
+    message: text("message").notNull(),
+    // The short code shown to the person on the "didn't load" screen.
+    digest: text("digest"),
+  },
+  (t) => [index("error_log_at_idx").on(t.at)],
 ).enableRLS();
 
 /* ---------- Chats (inbox) ---------- */

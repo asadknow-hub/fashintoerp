@@ -2,7 +2,7 @@ import "server-only";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import * as schema from "./schema";
-import { databaseUrl } from "./url";
+import { databaseSsl, databaseUrl } from "./url";
 
 const globalForDb = globalThis as unknown as {
   pg?: ReturnType<typeof postgres>;
@@ -19,9 +19,13 @@ function client() {
   // The timeouts make a database that has gone quiet show up as an error
   // within seconds instead of a page that never finishes, and unused
   // connections are handed back so sleeping copies of the app don't keep them.
+  // A few connections per copy of the app are plenty: a page's queries
+  // queue for a moment rather than one page taking every connection there is.
+  const ssl = databaseSsl();
   globalForDb.pg ??= postgres(databaseUrl(), {
+    ...(ssl && { ssl }),
     prepare: false,
-    max: 10,
+    max: 5,
     max_pipeline: 1,
     idle_timeout: 20,
     connect_timeout: 15,

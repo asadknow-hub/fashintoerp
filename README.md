@@ -1,6 +1,6 @@
 # Fashinto ERP
 
-One place to run the business: stock, orders, customers and customer chats.
+One place to run the business: stock, orders and customers.
 
 ## What it does
 
@@ -10,7 +10,6 @@ One place to run the business: stock, orders, customers and customer chats.
 - **Search** — products by name or SKU, orders by number or customer, from the box at the top of every page.
 - **Orders** — create an order, stock goes down automatically. Cancel or return it, stock goes back.
 - **Customers** — saved automatically from orders (matched by phone number).
-- **Inbox** — WhatsApp, Instagram and Messenger chats in one screen, with saved replies and keyword auto replies.
 - **Staff** — owners add, edit and remove staff logins.
 
 ## Where things live
@@ -49,17 +48,6 @@ Files are kept in Vercel Blob. In Vercel open **Storage**, create a **Blob**
 store with **public** access, connect it to this project and redeploy. Until
 then the upload box on a product shows a short note instead.
 
-## Connecting chats (later)
-
-Chats come through a Meta (Facebook) developer app. Add these in Vercel when ready
-(see `.env.example`):
-
-- `META_VERIFY_TOKEN`, `META_APP_SECRET` — for receiving messages
-- `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID` — for WhatsApp replies
-- `META_PAGE_TOKEN` — for Instagram and Messenger replies
-
-The webhook address to give Meta is shown in the app under **Settings**.
-
 ## For developers
 
 ```bash
@@ -73,7 +61,5 @@ npm run dev
 - Tables are defined in `src/db/schema.ts`. After changing it run
   `npm run db:generate`, then `npm run db:migrate`.
 - All stock changes go through `changeStock` in `src/lib/stock.ts`.
-- Chat sending/receiving is in `src/lib/chat.ts`; Meta calls
-  `/api/webhooks/meta`.
 - Uploads go straight from the browser to Vercel Blob (`src/lib/media.ts`).
   For local development set `MEDIA_LOCAL_DIR=.uploads` to save files on disk.

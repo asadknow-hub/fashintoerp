@@ -39,6 +39,7 @@ import { OrderSearch } from "./order-search";
 type Status = (typeof orders.status.enumValues)[number];
 
 const PAGE_SIZE = 50;
+const BOARD_SIZE = 400;
 
 const filters: { key: string; label: string; statuses?: Status[] }[] = [
   { key: "", label: "All" },
@@ -214,6 +215,12 @@ export default async function OrdersPage({
       .leftJoin(deliveryCompanies, eq(deliveryCompanies.id, orders.deliveryCompanyId))
       .where(where)
       .orderBy(
+        // The board has room for a few hundred cards. If there are ever
+        // more, the ones kept are the orders still on their way, oldest
+        // first: an old order waiting must never drop out of sight.
+        ...(board
+          ? [sql`(${orders.status} = 'delivered')`, asc(orders.createdAt)]
+          : []),
         ...(board || sort === "date"
           ? []
           : [
@@ -225,7 +232,7 @@ export default async function OrdersPage({
         !board && sort === "date" && dir === "asc" ? asc(orders.createdAt) : desc(orders.createdAt),
         asc(orders.id),
       )
-      .limit(board ? 300 : PAGE_SIZE)
+      .limit(board ? BOARD_SIZE : PAGE_SIZE)
       .offset(board ? 0 : (page - 1) * PAGE_SIZE),
     db
       .select({
@@ -458,7 +465,11 @@ export default async function OrdersPage({
       {board ? (
         <OrderBoard
           currency={currency}
-          cards={rows.map(card)}
+          hidden={Math.max(0, total - rows.length)}
+          // Newest first inside each column, as on the list.
+          cards={[...rows]
+            .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+            .map(card)}
           companies={companiesFor(rows.map((row) => row.companyId))}
         />
       ) : rows.length === 0 ? (
