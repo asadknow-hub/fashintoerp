@@ -1,5 +1,5 @@
-import { and, asc, count, desc, eq, exists, ilike, inArray, or, sql } from "drizzle-orm";
-import { Columns3, List } from "lucide-react";
+import { and, asc, count, desc, eq, exists, ilike, inArray, or, type SQL, sql } from "drizzle-orm";
+import { ArrowDown, ArrowUp, ArrowUpDown, Columns3, List } from "lucide-react";
 import Link from "next/link";
 import { ClickableRow } from "@/components/clickable-row";
 import { CopyButton } from "@/components/copy-button";
@@ -26,6 +26,7 @@ import { cityCode } from "@/lib/locations";
 import { getPrefs } from "@/lib/settings";
 import { OrderActions, type OrderCard } from "./order-actions";
 import { OrderBoard } from "./order-board";
+import { OrderSearch } from "./order-search";
 
 type Status = (typeof orders.status.enumValues)[number];
 
@@ -43,6 +44,49 @@ const filters: { key: string; label: string; statuses?: Status[] }[] = [
   { key: "cancelled", label: "Cancelled", statuses: ["cancelled"] },
   { key: "returned", label: "Returns", statuses: ["returned"] },
 ];
+
+// The columns the list can be sorted by, with what each sorts on and the
+// direction the first click gives: newest and biggest first, names from A.
+type Direction = "asc" | "desc";
+const sorts = {
+  date: { first: "desc", by: sql`${orders.createdAt}` },
+  // FO9 before FO10: by the number in it, not letter by letter.
+  order: {
+    first: "asc",
+    by: sql`coalesce(nullif(regexp_replace(coalesce(${orders.trackingNumber}, ''), '[^0-9]', '', 'g'), '')::numeric, ${orders.number})`,
+  },
+  customer: { first: "asc", by: sql`lower(${customers.name})` },
+  items: {
+    first: "desc",
+    by: sql`(select coalesce(sum(i.quantity), 0) from order_items i where i.order_id = ${orders.id})`,
+  },
+  instruction: { first: "asc", by: sql`lower(nullif(trim(${orders.instruction}), ''))` },
+  description: {
+    first: "asc",
+    by: sql`(
+      select string_agg(lower(p.name) || ' ' || coalesce(v.size, '') || ' ' || coalesce(v.color, ''), ', ' order by p.name, v.created_at)
+      from order_items i
+      join variants v on v.id = i.variant_id
+      join products p on p.id = v.product_id
+      where i.order_id = ${orders.id}
+    )`,
+  },
+  // By city, then by area inside it.
+  address: {
+    first: "asc",
+    by: sql`lower(nullif(trim(concat_ws(' ', ${orders.city}, ${orders.area}, ${orders.street})), ''))`,
+  },
+  cod: {
+    first: "desc",
+    by: sql`case when ${orders.payment} = 'cod' or ${orders.exchangeOfId} is not null then ${orders.codAmount} else 0 end`,
+  },
+  // How far along the order is.
+  actions: {
+    first: "asc",
+    by: sql`case ${orders.status} when 'new' then 0 when 'confirmed' then 1 when 'packed' then 1 when 'shipped' then 2 when 'delivered' then 3 when 'returned' then 4 else 5 end`,
+  },
+} satisfies Record<string, { first: Direction; by: SQL }>;
+type SortKey = keyof typeof sorts;
 
 export default async function OrdersPage({
   searchParams,
@@ -65,6 +109,12 @@ export default async function OrdersPage({
     : [];
 
   const page = pageNumber(params.page);
+  const sort: SortKey =
+    typeof params.sort === "string" && Object.hasOwn(sorts, params.sort)
+      ? (params.sort as SortKey)
+      : "date";
+  const dir: Direction =
+    params.dir === "asc" || params.dir === "desc" ? params.dir : sorts[sort].first;
   const where = and(
     board
       ? // Everything still on its way, plus what was delivered this week.
@@ -150,7 +200,18 @@ export default async function OrdersPage({
       .innerJoin(customers, eq(customers.id, orders.customerId))
       .leftJoin(deliveryCompanies, eq(deliveryCompanies.id, orders.deliveryCompanyId))
       .where(where)
-      .orderBy(desc(orders.createdAt))
+      .orderBy(
+        ...(board || sort === "date"
+          ? []
+          : [
+              // Orders with nothing in that column go to the bottom either way.
+              dir === "asc"
+                ? sql`${sorts[sort].by} asc nulls last`
+                : sql`${sorts[sort].by} desc nulls last`,
+            ]),
+        !board && sort === "date" && dir === "asc" ? asc(orders.createdAt) : desc(orders.createdAt),
+        asc(orders.id),
+      )
       .limit(board ? 300 : PAGE_SIZE)
       .offset(board ? 0 : (page - 1) * PAGE_SIZE),
     db
@@ -252,19 +313,64 @@ export default async function OrdersPage({
         openedFee: Number(company.openedFee),
       }));
 
-  const pageHref = (target: number) => {
+  // The address of the list with something changed: the filter, the sorting
+  // or the page. Everything not named stays as it is.
+  const listHref = (change: {
+    status?: string;
+    q?: string;
+    sort?: SortKey;
+    dir?: Direction;
+    page?: number;
+  }) => {
+    const next = { status: filter.key, q, sort, dir, page: 1, ...change };
     const query = new URLSearchParams();
-    if (filter.key) query.set("status", filter.key);
+    if (next.status) query.set("status", next.status);
     if (only) query.set("product", productId!);
-    if (q) query.set("q", q);
-    if (target > 1) query.set("page", String(target));
+    if (next.q) query.set("q", next.q);
+    if (next.sort !== "date" || next.dir !== "desc") {
+      query.set("sort", next.sort);
+      query.set("dir", next.dir);
+    }
+    if (next.page > 1) query.set("page", String(next.page));
     const text = query.toString();
     return text ? `/orders?${text}` : "/orders";
   };
+  const pageHref = (target: number) => listHref({ page: target });
 
   // Tight cells: this list is worked from all day.
-  const head = "px-2.5 py-2 text-left text-xs font-semibold whitespace-nowrap text-stone-600";
-  const cell = "px-2.5 py-2";
+  // Light lines between the columns, like a spreadsheet.
+  const line = " border-r border-stone-200 last:border-r-0";
+  const head =
+    "px-2.5 py-2 text-left text-xs font-semibold whitespace-nowrap text-stone-600 bg-stone-50" + line;
+  const cell = "px-2.5 py-2" + line;
+  // A column heading that sorts the list by that column; again to turn it round.
+  const heading = (key: SortKey, label: string, className = "") => {
+    const on = sort === key;
+    const Arrow = !on ? ArrowUpDown : dir === "asc" ? ArrowUp : ArrowDown;
+    return (
+      <th
+        className={head + className}
+        aria-sort={on ? (dir === "asc" ? "ascending" : "descending") : undefined}
+      >
+        <Link
+          href={listHref({
+            sort: key,
+            dir: on ? (dir === "asc" ? "desc" : "asc") : sorts[key].first,
+          })}
+          data-sort={key}
+          title={`Sort by ${label.toLowerCase()}`}
+          className={
+            "group inline-flex items-center gap-1 hover:text-brand " + (on ? "text-brand" : "")
+          }
+        >
+          {label}
+          <Arrow
+            className={"size-3 " + (on ? "" : "text-stone-400 opacity-60 group-hover:opacity-100")}
+          />
+        </Link>
+      </th>
+    );
+  };
 
   return (
     <>
@@ -321,16 +427,7 @@ export default async function OrdersPage({
           {filters.map((f) => (
             <Link
               key={f.key}
-              href={
-                "/orders" +
-                (f.key || only
-                  ? "?" +
-                    new URLSearchParams({
-                      ...(f.key && { status: f.key }),
-                      ...(only && { product: productId! }),
-                    })
-                  : "")
-              }
+              href={listHref({ status: f.key, q: "" })}
               className={
                 "rounded-full px-3 py-1.5 text-xs font-medium " +
                 (filter.key === f.key
@@ -342,19 +439,7 @@ export default async function OrdersPage({
             </Link>
           ))}
         </div>
-        <form className="ml-auto flex gap-2">
-          {board && <input type="hidden" name="view" value="board" />}
-          {!board && filter.key && (
-            <input type="hidden" name="status" value={filter.key} />
-          )}
-          <input
-            name="q"
-            defaultValue={q}
-            placeholder="FO number, name or phone"
-            className="input w-56"
-          />
-          <button className="btn-secondary">Search</button>
-        </form>
+        <OrderSearch q={q} />
       </div>
 
       {board ? (
@@ -383,18 +468,18 @@ export default async function OrdersPage({
           <table className="w-full text-[13px] leading-snug">
             <thead className="border-b border-stone-200">
               <tr>
-                <th className={head + " w-px"}>Date</th>
-                <th className={head + " w-px"}>Order</th>
-                <th className={head}>Customer</th>
-                <th className={head + " w-px text-center"}>Items</th>
-                <th className={head}>Instruction</th>
-                <th className={head}>Description</th>
-                <th className={head}>Address</th>
-                <th className={head + " w-px text-right"}>COD</th>
-                <th className={head + " w-px"}>Actions</th>
+                {heading("date", "Date", " w-px")}
+                {heading("order", "Order", " w-px")}
+                {heading("customer", "Customer")}
+                {heading("items", "Items", " w-px text-center")}
+                {heading("instruction", "Instruction")}
+                {heading("description", "Description")}
+                {heading("address", "Address")}
+                {heading("cod", "COD", " w-px text-right")}
+                {heading("actions", "Actions", " w-px")}
               </tr>
             </thead>
-            <tbody className="divide-y divide-stone-100">
+            <tbody className="divide-y divide-stone-200">
               {rows.map((row) => {
                 const inside = contents.get(row.id);
                 const shut = row.status === "cancelled" || row.status === "returned";
@@ -518,7 +603,7 @@ export default async function OrdersPage({
                       {row.status === "returned" && row.deliveredOn && (
                         <span
                           className={
-                            "mt-1 block text-xs " +
+                            "mt-1 block text-xs whitespace-nowrap " +
                             (row.refundSentAt ? "text-stone-500" : "font-semibold text-amber-700")
                           }
                         >
@@ -531,7 +616,7 @@ export default async function OrdersPage({
                         </span>
                       )}
                       {row.status === "cancelled" && row.cancelFee !== null && (
-                        <span className="mt-1 block text-xs text-stone-500">
+                        <span className="mt-1 block text-xs whitespace-nowrap text-stone-500">
                           Opened: {formatMoney(row.cancelFee, currency)} charged
                         </span>
                       )}
