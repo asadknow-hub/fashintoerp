@@ -30,6 +30,7 @@ import { formatDate, formatDateTime, formatMoney, isUuid, sortSizes, variantLabe
 import { mediaMode, mediaOffReason } from "@/lib/media";
 import { itemShares } from "@/lib/order-amount";
 import { getPrefs } from "@/lib/settings";
+import { shelfHeld } from "@/lib/shelf";
 import { addVariants, updateVariants } from "../actions";
 import { ProductTop } from "./product-top";
 import { PurchaseBatches } from "./purchase-batches";
@@ -43,7 +44,7 @@ const reasonLabel = {
   return: "Customer return",
   cancelled: "Order cancelled",
   damage: "Damaged / lost",
-  adjustment: "Stock set from a count",
+  adjustment: "Stock corrected from a count",
 } as const;
 
 export default async function ProductPage({ params }: PageProps<"/inventory/[id]">) {
@@ -65,6 +66,7 @@ export default async function ProductPage({ params }: PageProps<"/inventory/[id]
     movementTotals,
     [sales],
     categoryRows,
+    held,
   ] = await Promise.all([
     db.select().from(products).where(eq(products.id, id)),
     getPrefs(),
@@ -172,6 +174,8 @@ export default async function ProductPage({ params }: PageProps<"/inventory/[id]
       .selectDistinct({ category: products.category })
       .from(products)
       .where(isNotNull(products.category)),
+    // Pieces still on the shelf for orders that have not been sent out.
+    shelfHeld({ productId: id }),
   ]);
   if (!product) notFound();
 
@@ -324,6 +328,7 @@ export default async function ProductPage({ params }: PageProps<"/inventory/[id]
               size: v.size,
               color: v.color,
               stock: v.stock,
+              held: held.get(v.id) ?? 0,
               lowStockAt: v.lowStockAt,
             }))}
             sizes={sizes}

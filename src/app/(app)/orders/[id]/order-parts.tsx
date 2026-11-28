@@ -272,8 +272,11 @@ export function EditOrder({
   details,
   piecesOut,
   restockByDefault,
+  status,
   label,
 }: {
+  // The order's status when the page was drawn, to notice a change meanwhile.
+  status: string;
   // What the pencil is called where it sits (it opens the same pop-up).
   label?: string;
   orderId: string;
@@ -292,6 +295,16 @@ export function EditOrder({
   const [deleting, setDeleting] = useState(false);
   const [result, save, saving] = useActionState(editOrder.bind(null, orderId), null);
   const [gone, remove, removing] = useActionState(deleteOrder.bind(null, orderId), null);
+  // Sent by hand, so what was typed stays in the boxes when a save is refused.
+  const [, startSend] = useTransition();
+  const send =
+    (action: (data: FormData) => void, busy: boolean) =>
+    (event: React.FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      if (busy) return;
+      const data = new FormData(event.currentTarget);
+      startSend(() => action(data));
+    };
   const [seen, setSeen] = useState(result);
   if (result !== seen) {
     setSeen(result);
@@ -330,7 +343,8 @@ export function EditOrder({
       </button>
       {open && deleting && (
         <Modal title={`Delete Order ${name}?`} onClose={close}>
-          <form action={remove} data-delete-order>
+          <form onSubmit={send(remove, removing || !!gone?.go)} data-delete-order>
+            <input type="hidden" name="was" value={status} />
             <div className="space-y-3 p-4 text-sm">
               <p className="rounded-lg bg-rose-50 px-3 py-2 text-rose-800">
                 This removes the order for good, with everything recorded on it. It can&apos;t be
@@ -380,7 +394,7 @@ export function EditOrder({
       )}
       {open && !deleting && (
         <Modal title={`Edit Order ${name}`} onClose={close} wide={admin}>
-          <form action={save} data-edit-order>
+          <form onSubmit={send(save, saving)} data-edit-order>
             <div className={"grid gap-3 p-4 " + (admin ? "sm:grid-cols-4" : "sm:grid-cols-2")}>
               {field(
                 "FO number",

@@ -17,6 +17,7 @@ import { audit, productSubject } from "@/lib/audit";
 import { requireUser } from "@/lib/auth";
 import { amount, isUuid, optional, text, wholeNumber } from "@/lib/format";
 import { isOurUrl, removeFile } from "@/lib/media";
+import { shelfHeld } from "@/lib/shelf";
 import { cleanTag } from "@/lib/media-rules";
 import { offerTotal } from "@/lib/offer";
 import { changeStock, StockError } from "@/lib/stock";
@@ -813,8 +814,11 @@ const tally = (lines: { counted: number; system: number }[]) => {
     [missing ? `${missing} missing` : null, extra ? `${extra} extra` : null]
       .filter(Boolean)
       .join(" and ") || "all match";
-  return `system had ${system}, you counted ${counted} (${gap})`;
+  return `the shelf should hold ${system}, you counted ${counted} (${gap})`;
 };
+
+// A count older than this is no longer a fair picture of the shelf.
+const COUNT_DAYS = 3;
 
 // Saves a fresh count as a snapshot, or updates one that is being edited.
 // Stock itself is not touched.
@@ -844,6 +848,9 @@ export async function saveCount(
     typed.push({ variantId: row.id, counted, stock: row.stock });
   }
   if (typed.length === 0) return { error: "Type what you counted in at least one box." };
+  // What the shelf should hold: the stock, plus pieces waiting to be sent out.
+  const held = await shelfHeld({ variantIds: typed.map((entry) => entry.variantId) });
+  for (const entry of typed) entry.stock += held.get(entry.variantId) ?? 0;
 
   const result = await db.transaction(async (tx) => {
     // When editing, each item keeps the system number it was first compared with.
@@ -928,17 +935,23 @@ export async function applyCount(countId: string): Promise<ActionState> {
   try {
     const changed = await db.transaction(async (tx) => {
       const [count] = await tx
-        .select({ appliedAt: stockCounts.appliedAt })
+        .select({ appliedAt: stockCounts.appliedAt, createdAt: stockCounts.createdAt })
         .from(stockCounts)
         .where(eq(stockCounts.id, countId))
         .for("update");
       if (!count) throw new StockError("That count no longer exists.");
       if (count.appliedAt) throw new StockError("That count was already used as the stock.");
+      if (Date.now() - count.createdAt.getTime() > COUNT_DAYS * 24 * 60 * 60 * 1000) {
+        throw new StockError(
+          `This count is more than ${COUNT_DAYS} days old. Count again and use the new count.`,
+        );
+      }
 
       const lines = await tx
         .select({
           variantId: stockCountLines.variantId,
           counted: stockCountLines.counted,
+          expected: stockCountLines.systemStock,
           stock: variants.stock,
         })
         .from(stockCountLines)
@@ -947,13 +960,20 @@ export async function applyCount(countId: string): Promise<ActionState> {
         .for("update", { of: variants });
       let total = 0;
       for (const line of lines) {
-        const change = line.counted - line.stock;
+        // The difference the count found, added to today's stock: what was
+        // sold or received since the count stays counted.
+        const change = line.counted - line.expected;
         if (change === 0) continue;
+        if (line.stock + change < 0) {
+          throw new StockError(
+            "Too much of this product was sold since the count was taken. Count again and use the new count.",
+          );
+        }
         await changeStock(tx, {
           variantId: line.variantId,
           change,
           reason: "adjustment",
-          note: "Stock set from a fresh count",
+          note: "Stock corrected from a fresh count",
           userId: user.id,
         });
         total++;
@@ -970,7 +990,7 @@ export async function applyCount(countId: string): Promise<ActionState> {
         area: "stock",
         action: "stock.count_applied",
         subject: await productSubject(counted.productId),
-        summary: `Set the stock to match a count (${changed} sizes and colors changed)`,
+        summary: `Corrected the stock from a count (${changed} sizes and colors changed)`,
         productId: counted.productId,
       });
     }
@@ -979,7 +999,7 @@ export async function applyCount(countId: string): Promise<ActionState> {
       ok:
         changed === 0
           ? "Stock already matched this count, so nothing changed."
-          : "Stock now matches this count.",
+          : "Stock corrected by what this count found.",
     };
   } catch (err) {
     if (err instanceof StockError) return { error: err.message };

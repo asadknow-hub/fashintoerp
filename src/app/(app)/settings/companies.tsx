@@ -18,6 +18,7 @@ export function Companies({
   currency: string;
 }) {
   const [added, add, adding] = useActionState(addCompany, null);
+  const [, startSend] = useTransition();
   const [seen, setSeen] = useState(added);
   // Bumped after each company is added, to empty the boxes for the next one.
   const [round, setRound] = useState(0);
@@ -57,7 +58,13 @@ export function Companies({
       {canEdit && (
         <form
           key={round}
-          action={add}
+          // Sent by hand, so what was typed stays when the save is refused.
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (adding) return;
+            const data = new FormData(event.currentTarget);
+            startSend(() => add(data));
+          }}
           className="grid grid-cols-[minmax(0,1fr)_5.5rem_5.5rem_auto] items-center gap-x-2 px-3 py-2.5"
         >
           <input
@@ -98,9 +105,15 @@ export function Companies({
 function Row({ company }: { company: CompanyRow }) {
   const [state, save, saving] = useActionState(updateCompany.bind(null, company.id), null);
   const [removing, startRemove] = useTransition();
+  const [, startSend] = useTransition();
   return (
     <form
-      action={save}
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (saving) return;
+        const data = new FormData(event.currentTarget);
+        startSend(() => save(data));
+      }}
       data-company={company.name}
       className="grid grid-cols-[minmax(0,1fr)_5.5rem_5.5rem_auto] items-center gap-x-2 border-b border-stone-100 px-3 py-2"
     >

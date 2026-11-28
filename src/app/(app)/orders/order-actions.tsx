@@ -135,14 +135,15 @@ export function StepsModal({
   const [companyId, setCompanyId] = useState(
     order.companyId ?? (companies.length === 1 ? companies[0].id : ""),
   );
-  // Empty until someone types: then they follow the company's usual charges.
-  const [charge, setCharge] = useState(
-    order.deliveryCharge === null ? "" : String(order.deliveryCharge),
+  // Not typed yet (null): the box follows the company's usual charge. Once
+  // someone types, or empties the box to type a new amount, it is theirs.
+  const [charge, setCharge] = useState<string | null>(
+    order.deliveryCharge === null ? null : String(order.deliveryCharge),
   );
-  const [returnFee, setReturnFee] = useState("");
-  const [returnCharge, setReturnCharge] = useState("");
+  const [returnFee, setReturnFee] = useState<string | null>(null);
+  const [returnCharge, setReturnCharge] = useState<string | null>(null);
   const [opened, setOpened] = useState(false);
-  const [cancelFee, setCancelFee] = useState("");
+  const [cancelFee, setCancelFee] = useState<string | null>(null);
 
   // Saved: the page behind already shows the change.
   if (result !== seen.result || returned !== seen.returned || cancelled !== seen.cancelled) {
@@ -158,10 +159,10 @@ export function StepsModal({
 
   const company = companies.find((c) => c.id === companyId);
   const usual = company ? company.rate.toFixed(2) : "";
-  const chargeShown = charge === "" ? usual : charge;
-  const returnFeeShown = returnFee === "" ? usual : returnFee;
-  const returnChargeShown = returnCharge === "" ? usual : returnCharge;
-  const cancelFeeShown = cancelFee === "" ? (company ? company.openedFee.toFixed(2) : "10.00") : cancelFee;
+  const chargeShown = charge ?? usual;
+  const returnFeeShown = returnFee ?? usual;
+  const returnChargeShown = returnCharge ?? usual;
+  const cancelFeeShown = cancelFee ?? (company ? company.openedFee.toFixed(2) : "10.00");
   // A return: the customer is paid back what they paid, less the part of
   // the delivery cost they cover; the company's charge for the trip comes
   // off the payout; the gap between the two is what the return costs.

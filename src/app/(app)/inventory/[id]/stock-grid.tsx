@@ -22,6 +22,8 @@ export type GridVariant = {
   size: string | null;
   color: string | null;
   stock: number;
+  // Pieces on the shelf for orders not sent out yet (already off the stock).
+  held: number;
   lowStockAt: number;
 };
 
@@ -38,7 +40,7 @@ export type CountSnapshot = {
 const modes = {
   count: {
     button: "Fresh count",
-    hint: "Type what you counted. It is saved as a snapshot and does not change stock.",
+    hint: "Type what is on the shelf, including pieces packed for orders not sent out yet. It is saved as a snapshot and does not change stock.",
     save: "Save count",
   },
   damaged: {
@@ -127,10 +129,11 @@ export function StockGrid({
     return raw && Number.isInteger(n) && n >= 0 ? n : null;
   };
 
-  // What a count is compared with: the system's number when it was first
-  // counted (kept while editing), otherwise what the system has now.
+  // What a count is compared with: what the shelf should hold. That is the
+  // stock plus the pieces waiting to be sent out (kept as first counted
+  // while editing).
   const baseline = (v: GridVariant) =>
-    editing?.lines.find((line) => line.variantId === v.id)?.system ?? v.stock;
+    editing?.lines.find((line) => line.variantId === v.id)?.system ?? v.stock + v.held;
 
   // What the stock will be once saved. A count never changes it.
   const after = (v: GridVariant) => {
@@ -314,12 +317,12 @@ export function StockGrid({
                             }
                           >
                             {n === null
-                              ? `system ${base}`
+                              ? `should be ${base}`
                               : n === base
                                 ? `${base} ✓ matches`
                                 : n < base
-                                  ? `system ${base} · ${base - n} missing`
-                                  : `system ${base} · ${n - base} extra`}
+                                  ? `should be ${base} · ${base - n} missing`
+                                  : `should be ${base} · ${n - base} extra`}
                           </span>
                         ) : (
                           <span className="mt-0.5 block text-[11px] text-stone-400">
@@ -371,8 +374,8 @@ export function StockGrid({
                   "Nothing counted yet"
                 ) : (
                   <>
-                    Counted {counted.length} of {variants.length} · system had{" "}
-                    <b>{expected}</b>, you counted <b>{found}</b>
+                    Counted {counted.length} of {variants.length} · the shelf
+                    should hold <b>{expected}</b>, you counted <b>{found}</b>
                     {missing > 0 && (
                       <b className="text-rose-700"> · {missing} missing</b>
                     )}
@@ -439,8 +442,8 @@ export function StockGrid({
             <h3 className="bg-stone-50 px-4 py-1.5 text-xs font-bold text-stone-700">
               Count snapshots
               <span className="ml-2 font-normal tracking-normal normal-case">
-                For reference only. They don&apos;t change stock, and deleting
-                one changes nothing.
+                A count changes stock only when you press Use as stock.
+                Deleting one changes nothing.
               </span>
             </h3>
             <ul className="divide-y divide-stone-100">
@@ -448,16 +451,9 @@ export function StockGrid({
                 const sumOf = (
                   pick: (line: CountSnapshot["lines"][number]) => number,
                 ) => count.lines.reduce((sum, line) => sum + pick(line), 0);
-                const stockNow = (line: CountSnapshot["lines"][number]) =>
-                  variants.find((v) => v.id === line.variantId)?.stock ??
-                  line.system;
                 const then = gap(
                   sumOf((line) => Math.max(0, line.system - line.counted)),
                   sumOf((line) => Math.max(0, line.counted - line.system)),
-                );
-                const now = gap(
-                  sumOf((line) => Math.max(0, stockNow(line) - line.counted)),
-                  sumOf((line) => Math.max(0, line.counted - stockNow(line))),
                 );
                 const open = openId === count.id;
                 return (
@@ -504,7 +500,7 @@ export function StockGrid({
                             onClick={() => {
                               if (
                                 window.confirm(
-                                  "This changes the real stock to match this count. Only do this if the count is the truth and no orders for these items are still to be entered. Continue?",
+                                  `This corrects the stock by what this count found (${then}). Pieces packed for orders not yet sent out were allowed for. Continue?`,
                                 )
                               ) {
                                 act(() => applyCount(count.id));
@@ -534,9 +530,9 @@ export function StockGrid({
                       </span>
                     </div>
                     <p className="text-xs text-stone-600 tabular-nums">
-                      Counted <b>{sumOf((line) => line.counted)}</b> · system
-                      had <b>{sumOf((line) => line.system)}</b> then ({then}) ·
-                      system has <b>{sumOf(stockNow)}</b> now ({now})
+                      Counted <b>{sumOf((line) => line.counted)}</b> · the
+                      shelf should have held{" "}
+                      <b>{sumOf((line) => line.system)}</b> ({then})
                     </p>
 
                     {open && (
@@ -545,7 +541,7 @@ export function StockGrid({
                           <thead>
                             <tr className="border-b border-stone-200 text-stone-500">
                               <th className="px-2 py-1 text-left font-medium">
-                                Counted (system then)
+                                Counted (should be)
                               </th>
                               {sizes.map((size) => (
                                 <th

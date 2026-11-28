@@ -861,11 +861,15 @@ function Editor({
   useEffect(() => {
     clear.current = startOver;
   });
+  // "Creating…" stays on the button until the new order's page is showing.
+  // Coming back to this screen later (the Back button), it is ready again.
+  const [leaving, startLeaving] = useTransition();
   useEffect(() => {
     if (state?.go && followed.current !== state) {
       followed.current = state;
       clear.current();
-      router.push(state.go);
+      const go = state.go;
+      startLeaving(() => router.push(go));
     }
   }, [state, router]);
 
@@ -1058,9 +1062,16 @@ function Editor({
   return (
     <form
       className="space-y-4"
+      // Enter in a box must never create the order by accident: only the
+      // Create Order button does.
+      onKeyDown={(event) => {
+        if (event.key === "Enter" && event.target instanceof HTMLInputElement) {
+          event.preventDefault();
+        }
+      }}
       onSubmit={(event) => {
         event.preventDefault();
-        if (hold || pending) return;
+        if (hold || pending || leaving) return;
         const data = new FormData(event.currentTarget);
         startTransition(() => run(data));
       }}
@@ -1640,13 +1651,21 @@ function Editor({
               aria-label="Add another item"
               title="Add another item"
               onClick={() =>
-                setRows((current) => [
-                  ...current,
-                  {
-                    ...blank(Math.max(...current.map((row) => row.key)) + 1),
-                    productId: current[current.length - 1]?.productId ?? "",
-                  },
-                ])
+                setRows((current) => {
+                  const above = products.find(
+                    (product) => product.id === current[current.length - 1]?.productId,
+                  );
+                  return [
+                    ...current,
+                    {
+                      ...blank(Math.max(...current.map((row) => row.key)) + 1),
+                      productId: above?.id ?? "",
+                      // One color (or size) only: nothing to choose.
+                      color: above?.colors.length === 1 ? above.colors[0] : undefined,
+                      size: above?.sizes.length === 1 ? above.sizes[0] : undefined,
+                    },
+                  ];
+                })
               }
               className="mt-3 inline-flex size-9 cursor-pointer items-center justify-center rounded-lg border border-brand bg-white text-brand hover:bg-brand-50"
             >
@@ -1747,11 +1766,11 @@ function Editor({
         <div className="w-full sm:w-auto">
           <button
             type="submit"
-            disabled={pending || hold !== null || !!state?.go}
+            disabled={pending || leaving || hold !== null}
             className="inline-flex h-14 w-full cursor-pointer items-center justify-center gap-2.5 rounded-xl bg-brand px-8 text-lg font-bold text-white shadow-sm transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
           >
             <Check className="size-5" strokeWidth={2.6} />
-            {pending || state?.go ? "Creating…" : "Create Order"}
+            {pending || leaving ? "Creating…" : "Create Order"}
           </button>
           {state?.error && (
             <p role="alert" className="mt-2 max-w-64 text-sm font-semibold text-rose-700">

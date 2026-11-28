@@ -575,6 +575,8 @@ export async function deleteOrder(
   if (user.role === "staff") return { error: "Only an Owner or the System Admin can delete an order." };
   if (!isUuid(orderId)) return { error: "Order not found." };
   const restock = form.get("restock") === "on";
+  // The state the pop-up was opened on.
+  const was = text(form, "was");
 
   let gone = { subject: "An order", summary: "Deleted the order" };
   try {
@@ -592,6 +594,19 @@ export async function deleteOrder(
         .where(eq(orders.id, orderId))
         .for("update", { of: orders });
       if (!order) throw new StockError("Order not found.");
+      // Whether to put the pieces back was decided looking at an older state.
+      if (was && was !== order.status) {
+        throw new StockError(
+          "Someone else changed this order a moment ago. Close this, check the order, and try again.",
+        );
+      }
+      // Its old pieces are still coming back through the order that replaced it.
+      const swapped = await liveExchange(tx, orderId);
+      if (swapped) {
+        throw new StockError(
+          `This order was exchanged with ${swapped}. Delete (or cancel) that order first.`,
+        );
+      }
       gone = {
         subject: `Order ${orderName(order.ref, order.number)}`,
         summary:

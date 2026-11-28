@@ -382,8 +382,10 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
     piecesOut: items
       .filter((item) => item.backState !== "stock" && item.backState !== "discarded")
       .reduce((sum, item) => sum + item.quantity, 0),
-    // Sensible while the parcel has not reached a customer.
-    restockByDefault: stage === "new" || stage === "portal" || stage === "dispatched",
+    // Sensible only while the parcel has not left: after that the pieces are
+    // with the driver or the customer.
+    restockByDefault: stage === "new" || stage === "portal",
+    status: order.status,
   };
   // Items can be changed until the order's stock is settled: not once it is
   // closed, was exchanged, or has pieces that came back.
