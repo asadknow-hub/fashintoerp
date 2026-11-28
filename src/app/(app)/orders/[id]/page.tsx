@@ -43,6 +43,7 @@ import {
   OutcomeActions,
   RefundSent,
 } from "./order-parts";
+import { CorrectJourney } from "./correct-journey";
 
 // Everything about the lines of an order that this page shows.
 function itemsOf(orderId: string) {
@@ -324,6 +325,7 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
         "order.refund",
         "order.steps_undone",
         "order.delivery_updated",
+        "order.corrected",
       ].includes(line.action) || line.action.startsWith("order.item_"),
   );
   const events: { label: string; at: Date; by: string | null }[] = [
@@ -421,6 +423,37 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
             <EditOrder {...editing} />
           </p>
         </div>
+        {/* Only the System Admin can set an order's journey straight. */}
+        {user.role === "admin" && (
+          <div className="mt-1.5 ml-auto">
+            <CorrectJourney
+              orderId={order.id}
+              name={name}
+              status={order.status}
+              current={stage === "closed" ? (order.status === "returned" ? "returned" : "cancelled") : stage}
+              companies={companies
+                .filter((option) => option.active || option.id === order.deliveryCompanyId)
+                .map((option) => ({
+                  id: option.id,
+                  name: option.name,
+                  rate: Number(option.rate),
+                  openedFee: Number(option.openedFee),
+                }))}
+              companyId={order.deliveryCompanyId}
+              deliveryCharge={order.deliveryCharge === null ? null : Number(order.deliveryCharge)}
+              returnFee={order.returnFee === null ? null : Number(order.returnFee)}
+              returnCharge={order.returnCharge === null ? null : Number(order.returnCharge)}
+              cancelFee={order.cancelFee === null ? null : Number(order.cancelFee)}
+              sentOut={order.dispatchedAt !== null}
+              paid={paid}
+              piecesBack={items
+                .filter((item) => item.backState === "stock")
+                .reduce((sum, item) => sum + item.quantity, 0)}
+              exchangedWith={swappedWith ? orderName(swappedWith.ref, swappedWith.number) : null}
+              currency={currency}
+            />
+          </div>
+        )}
       </div>
 
       {replaces && (

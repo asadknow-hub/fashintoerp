@@ -1,6 +1,6 @@
 "use server";
 
-import { and, count, eq, gt, inArray, ne, sql } from "drizzle-orm";
+import { type AnyColumn, and, count, eq, gt, inArray, ne, sql } from "drizzle-orm";
 import { refresh } from "next/cache";
 import type { ActionState } from "@/components/action-form";
 import { db } from "@/db";
@@ -1132,6 +1132,283 @@ export async function settleItem(
   }
   refresh();
   return { ok: "Saved." };
+}
+
+// "Correct journey" on the order page, for the System Admin only: when an
+// audit shows an order was marked wrongly (delivered when it was really
+// cancelled, returned when it was really delivered, and so on), set what
+// really happened in one go. Any state can be reached from any other.
+//
+// Stock follows what is physically true:
+//   - an order that is (back) on its way or with the customer has its pieces
+//     out, so pieces that were put back into stock for it are taken out again;
+//   - cancelled before the parcel was sent out: its pieces go back now;
+//   - cancelled after it was sent out, or returned: the pieces are on their
+//     way back and are settled one by one on the order page, as always.
+const journeyTargets = ["new", "portal", "dispatched", "delivered", "cancelled", "returned"] as const;
+type JourneyTarget = (typeof journeyTargets)[number];
+const journeyStatus: Record<JourneyTarget, Status> = {
+  new: "new",
+  portal: "confirmed",
+  dispatched: "shipped",
+  delivered: "delivered",
+  cancelled: "cancelled",
+  returned: "returned",
+};
+const statusName: Record<Status, string> = {
+  new: "New",
+  confirmed: "In portal",
+  packed: "In portal",
+  shipped: "Dispatched",
+  delivered: "Delivered",
+  cancelled: "Cancelled",
+  returned: "Returned",
+};
+
+export async function correctJourney(
+  orderId: string,
+  _state: ActionState,
+  form: FormData,
+): Promise<ActionState> {
+  const user = await requireUser();
+  if (user.role !== "admin") {
+    return { error: "Only the System Admin can correct an order's journey." };
+  }
+  if (!isUuid(orderId)) return { error: "Order not found." };
+  const target = journeyTargets.find((one) => one === text(form, "target"));
+  if (!target) return { error: "Choose what really happened to the order." };
+  // The state the pop-up was opened on.
+  const was = text(form, "was");
+
+  // Did the parcel leave the building? Always for a dispatched, delivered or
+  // returned order; for a cancelled one it is asked.
+  const sentOut =
+    target === "cancelled"
+      ? form.get("sentOut") === "on"
+      : target === "dispatched" || target === "delivered" || target === "returned";
+  const withCompany = target === "portal" || sentOut;
+  const companyId = text(form, "companyId");
+  if (withCompany && !isUuid(companyId)) return { error: "Choose the delivery company." };
+  const reached = target === "delivered" || target === "returned";
+  const charge = reached ? amount(form, "deliveryCharge") : null;
+  if (reached && (text(form, "deliveryCharge") === "" || charge === null)) {
+    return { error: "Enter the delivery charge of this order." };
+  }
+  const opened = target === "cancelled" && form.get("opened") === "on";
+  if (opened && !sentOut) {
+    return { error: "A parcel that was not sent out can't have been opened by the customer." };
+  }
+  const cancelFee = opened ? amount(form, "cancelFee") : null;
+  if (opened && (text(form, "cancelFee") === "" || cancelFee === null)) {
+    return { error: "Enter what the delivery company charges for the opened parcel." };
+  }
+  const returnFee = target === "returned" ? amount(form, "returnFee") : null;
+  const returnCharge = target === "returned" ? amount(form, "returnCharge") : null;
+  if (target === "returned") {
+    if (text(form, "returnFee") === "" || returnFee === null) {
+      return { error: "Enter how much of the delivery cost the customer covers (0 if none)." };
+    }
+    if (text(form, "returnCharge") === "" || returnCharge === null) {
+      return { error: "Enter what the delivery company charges for collecting the return." };
+    }
+  }
+
+  let log: { subject: string; from: Status; pieces: string } | null = null;
+  try {
+    await db.transaction(async (tx) => {
+      const [order] = await tx
+        .select({
+          status: orders.status,
+          number: orders.number,
+          ref: orders.trackingNumber,
+          payment: orders.payment,
+          codAmount: orders.codAmount,
+          total: orders.total,
+          exchangeOfId: orders.exchangeOfId,
+          refundBase: orders.refundBase,
+        })
+        .from(orders)
+        .where(eq(orders.id, orderId))
+        .for("update");
+      if (!order) throw new StockError("Order not found.");
+      if (was && was !== order.status) {
+        throw new StockError(
+          "Someone else changed this order a moment ago. Close this, check the order, and try again.",
+        );
+      }
+      const name = orderName(order.ref, order.number);
+      // What happened next is on the order that replaced this one.
+      const swapped = await liveExchange(tx, orderId);
+      if (swapped) {
+        throw new StockError(
+          `This order was exchanged with ${swapped}. Correct (or cancel) that order first.`,
+        );
+      }
+      // A cancelled exchange can only come back while the order it replaces
+      // is still delivered and was not exchanged again.
+      if (order.exchangeOfId && order.status === "cancelled" && target !== "cancelled") {
+        const [original] = await tx
+          .select({ status: orders.status })
+          .from(orders)
+          .where(eq(orders.id, order.exchangeOfId));
+        const again = await liveExchange(tx, order.exchangeOfId);
+        if (!original || original.status !== "delivered" || again) {
+          throw new StockError(
+            again
+              ? `The order this one replaces was exchanged again with ${again}, so this exchange has to stay cancelled.`
+              : "The order this one replaces is no longer delivered, so this exchange has to stay cancelled.",
+          );
+        }
+      }
+      if (withCompany) {
+        const [company] = await tx
+          .select({ id: deliveryCompanies.id })
+          .from(deliveryCompanies)
+          .where(eq(deliveryCompanies.id, companyId));
+        if (!company) throw new StockError("That delivery company no longer exists.");
+      }
+      if (target === "returned") {
+        const paid = Number(
+          order.refundBase ??
+            (order.payment === "cod" || order.exchangeOfId ? order.codAmount : order.total),
+        );
+        if (Number(returnFee) > paid + 0.005) {
+          throw new StockError("The customer can't cover more than they paid for the order.");
+        }
+      }
+
+      const items = await tx
+        .select()
+        .from(orderItems)
+        .where(eq(orderItems.orderId, orderId))
+        .for("update");
+      const wasClosed = closed.includes(order.status);
+      const open = target !== "cancelled" && target !== "returned";
+      let takenOut = 0;
+      let putBack = 0;
+      if (open && (wasClosed || target !== "delivered")) {
+        // The pieces are out with the order again.
+        for (const item of items) {
+          if (item.backState !== "stock") continue;
+          try {
+            await changeStock(tx, {
+              variantId: item.variantId,
+              change: -item.quantity,
+              reason: "sale",
+              note: `Order ${name}: journey corrected`,
+              orderId,
+              userId: user.id,
+            });
+          } catch (err) {
+            if (!(err instanceof StockError)) throw err;
+            throw new StockError(
+              `Pieces of this order were put back into stock and have been sold since. ${err.message}`,
+            );
+          }
+          takenOut += item.quantity;
+        }
+        await tx
+          .update(orderItems)
+          .set({ backState: null, backAt: null })
+          .where(eq(orderItems.orderId, orderId));
+      } else if (!open && !sentOut) {
+        // Cancelled before it left: the pieces never went anywhere.
+        for (const item of items) {
+          if (item.backState === "stock" || item.backState === "discarded") continue;
+          await changeStock(tx, {
+            variantId: item.variantId,
+            change: item.quantity,
+            reason: "cancelled",
+            note: `Order ${name}: journey corrected`,
+            orderId,
+            userId: user.id,
+          });
+          await tx
+            .update(orderItems)
+            .set({ backState: "stock", backAt: sql`now()` })
+            .where(eq(orderItems.id, item.id));
+          putBack += item.quantity;
+        }
+      }
+
+      // A step that already has its date keeps it; a new one is dated now.
+      const kept = (column: AnyColumn) => sql`coalesce(${column}, now())`;
+      await tx
+        .update(orders)
+        .set({
+          status: journeyStatus[target],
+          // Cancelled before it was sent out: whether it had reached the
+          // portal stays as it was recorded.
+          ...(target === "cancelled" && !sentOut
+            ? {}
+            : { portalAt: withCompany ? kept(orders.portalAt) : null }),
+          dispatchedAt: sentOut ? kept(orders.dispatchedAt) : null,
+          deliveredAt: reached ? kept(orders.deliveredAt) : null,
+          ...(withCompany
+            ? { deliveryCompanyId: companyId }
+            : target === "new"
+              ? { deliveryCompanyId: null }
+              : {}),
+          deliveryCharge: charge,
+          returnedAt: target === "returned" ? kept(orders.returnedAt) : null,
+          returnFee,
+          returnCharge,
+          // A refund already sent stays sent while the order stays returned.
+          ...(target === "returned" && order.status === "returned" ? {} : { refundSentAt: null }),
+          cancelledAt: target === "cancelled" ? kept(orders.cancelledAt) : null,
+          cancelFee,
+        })
+        .where(eq(orders.id, orderId));
+
+      const count = (n: number) => `${n} ${n === 1 ? "piece" : "pieces"}`;
+      log = {
+        subject: `Order ${name}`,
+        from: order.status,
+        pieces:
+          takenOut > 0
+            ? `; ${count(takenOut)} taken out of stock again`
+            : putBack > 0
+              ? `; ${count(putBack)} put back into stock`
+              : "",
+      };
+    });
+  } catch (err) {
+    if (err instanceof StockError) return { error: err.message };
+    throw err;
+  }
+  const entry = log as { subject: string; from: Status; pieces: string } | null;
+  if (entry) {
+    const to = journeyStatus[target];
+    const numbers = [
+      charge !== null ? `delivery charge ${formatMoney(charge)}` : "",
+      target === "returned"
+        ? `the customer covers ${formatMoney(returnFee)} of the delivery, return charge ${formatMoney(returnCharge)}`
+        : "",
+      target === "cancelled"
+        ? sentOut
+          ? opened
+            ? `the parcel was sent out and opened, ${formatMoney(cancelFee)} charged`
+            : "the parcel was sent out"
+          : "the parcel was never sent out"
+        : "",
+    ]
+      .filter(Boolean)
+      .join(", ");
+    await audit(user, {
+      area: "orders",
+      action: "order.corrected",
+      subject: entry.subject,
+      summary:
+        (entry.from === to
+          ? `Corrected the journey details (${statusName[to]})`
+          : `Corrected the journey: ${statusName[entry.from]} → ${statusName[to]}`) +
+        (numbers ? `: ${numbers}` : "") +
+        entry.pieces,
+      orderId,
+    });
+  }
+  refresh();
+  return { ok: "Journey corrected." };
 }
 
 // "Edit items" on the order page, for a System Admin: change what is in an
