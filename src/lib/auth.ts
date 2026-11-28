@@ -7,6 +7,7 @@ import { redirect } from "next/navigation";
 import { cache } from "react";
 import { db } from "@/db";
 import { sessions, users } from "@/db/schema";
+import { manages, type Role } from "@/lib/roles";
 
 const scryptAsync = promisify(scrypt) as (
   password: string,
@@ -21,7 +22,7 @@ export type CurrentUser = {
   id: string;
   name: string;
   email: string;
-  role: "owner" | "staff";
+  role: Role;
 };
 
 export async function hashPassword(password: string) {
@@ -101,8 +102,9 @@ export async function requireUser() {
   return user;
 }
 
+// For what only an Owner or the System Admin may do.
 export async function requireOwner() {
   const user = await requireUser();
-  if (user.role !== "owner") redirect("/");
+  if (!manages(user.role)) redirect("/");
   return user;
 }

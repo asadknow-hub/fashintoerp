@@ -29,7 +29,7 @@ import { getUser } from "@/lib/auth";
 export async function GET() {
   const user = await getUser();
   if (!user) return new Response("Please sign in.", { status: 401 });
-  if (user.role !== "owner") return new Response("Only a System Admin can do this.", { status: 403 });
+  if (user.role === "staff") return new Response("Only an Owner or the System Admin can do this.", { status: 403 });
 
   const [
     business,

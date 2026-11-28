@@ -1,14 +1,19 @@
 import { Field } from "@/components/ui";
+import { givable, type Role, roleLabel } from "@/lib/roles";
 
 // The fields shared by the "add" and "edit" staff forms.
 export function StaffFields({
   staff,
   self = false,
+  mine,
 }: {
-  staff?: { name: string; email: string; role: "owner" | "staff"; active: boolean };
+  staff?: { name: string; email: string; role: Role; active: boolean };
   self?: boolean;
+  // The role of whoever is filling this in: it decides which roles they can give.
+  mine: Role;
 }) {
   const editing = !!staff;
+  const choices = givable(mine);
   return (
     <>
       <div className="grid gap-4 sm:grid-cols-2">
@@ -31,18 +36,27 @@ export function StaffFields({
           hint={
             self
               ? "You can't change your own role."
-              : "A System Admin can manage staff and settings, and edit or delete any order."
+              : mine === "admin"
+                ? "An Owner is a partner: they manage staff and settings, and can edit or delete any order. They can't change your account or another Owner's."
+                : "Only the System Admin can add an Owner."
           }
         >
-          {self ? (
+          {self || choices.length < 2 ? (
             <>
-              <input type="hidden" name="role" value="owner" />
-              <input value="System Admin" disabled className="input bg-stone-100" />
+              <input type="hidden" name="role" value={self && staff ? staff.role : "staff"} />
+              <input
+                value={roleLabel[self && staff ? staff.role : "staff"]}
+                disabled
+                className="input bg-stone-100"
+              />
             </>
           ) : (
             <select name="role" defaultValue={staff?.role ?? "staff"} className="input">
-              <option value="staff">Staff</option>
-              <option value="owner">System Admin</option>
+              {choices.map((role) => (
+                <option key={role} value={role}>
+                  {roleLabel[role]}
+                </option>
+              ))}
             </select>
           )}
         </Field>

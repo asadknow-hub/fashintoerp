@@ -125,7 +125,7 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
       db.select().from(auditLog).where(eq(auditLog.orderId, id)).orderBy(asc(auditLog.at)),
       // Everything that can be put on an order, for the item editor (an
       // admin's tool): products on sale, plus what this order already holds.
-      user.role === "owner"
+      user.role !== "staff"
         ? db
             .select({
               id: variants.id,
@@ -355,7 +355,7 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
     ...extras.map((line) => ({ label: line.summary, at: line.at, by: line.userName })),
   ].sort((a, b) => a.at.getTime() - b.at.getTime());
 
-  const admin = user.role === "owner";
+  const admin = user.role !== "staff";
   // The edit pop-up, opened by the pencil beside the date and (for an
   // admin) by the one on the customer card.
   const editing = {

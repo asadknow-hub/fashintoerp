@@ -20,7 +20,7 @@ const areas = [
 ];
 
 // Who did what, and when: every change made in the system, newest first.
-// Only a System Admin can see it.
+// Only Owners and the System Admin can see it.
 export default async function ActivityPage({ searchParams }: PageProps<"/activity">) {
   const [, params, { timezone }] = await Promise.all([requireOwner(), searchParams, getPrefs()]);
   const one = (key: string) => (typeof params[key] === "string" ? (params[key] as string).trim() : "");

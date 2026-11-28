@@ -5,6 +5,7 @@ import { db } from "@/db";
 import { users } from "@/db/schema";
 import { requireOwner } from "@/lib/auth";
 import { formatDate } from "@/lib/format";
+import { canManage } from "@/lib/roles";
 import { getPrefs } from "@/lib/settings";
 
 export default async function StaffPage() {
@@ -42,19 +43,26 @@ export default async function StaffPage() {
             </tr>
           </thead>
           <tbody className="divide-y divide-stone-100">
-            {staff.map((person) => (
-              <tr key={person.id} className="hover:bg-stone-50">
+            {staff.map((person) => {
+              // Your own account, and the accounts below yours.
+              const mine = person.id === me.id || canManage(me.role, person.role);
+              return (
+              <tr key={person.id} data-staff-role={person.role} className="hover:bg-stone-50">
                 <td className="td font-medium">
-                  <Link href={`/staff/${person.id}`} className="hover:underline">
-                    {person.name}
-                  </Link>
+                  {mine ? (
+                    <Link href={`/staff/${person.id}`} className="hover:underline">
+                      {person.name}
+                    </Link>
+                  ) : (
+                    person.name
+                  )}
                   {person.id === me.id && (
                     <span className="ml-2 text-xs font-normal text-stone-500">(you)</span>
                   )}
                 </td>
                 <td className="td text-stone-600">{person.email}</td>
                 <td className="td">
-                  <Badge tone={person.role === "owner" ? "blue" : "gray"}>
+                  <Badge tone={person.role === "admin" ? "purple" : person.role === "owner" ? "blue" : "gray"}>
                     {roleLabel[person.role]}
                   </Badge>
                 </td>
@@ -67,12 +75,15 @@ export default async function StaffPage() {
                   {formatDate(person.createdAt, timezone)}
                 </td>
                 <td className="td text-right">
-                  <Link href={`/staff/${person.id}`} className="btn-secondary btn-sm">
-                    Edit
-                  </Link>
+                  {mine && (
+                    <Link href={`/staff/${person.id}`} className="btn-secondary btn-sm">
+                      Edit
+                    </Link>
+                  )}
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </div>

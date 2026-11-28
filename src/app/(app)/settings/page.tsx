@@ -14,7 +14,7 @@ import { Companies } from "./companies";
 
 export default async function SettingsPage() {
   const user = await requireUser();
-  const owner = user.role === "owner";
+  const owner = user.role !== "staff";
   const [business, companies, [me]] = await Promise.all([
     getSettings(),
     db

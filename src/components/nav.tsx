@@ -123,7 +123,7 @@ const row =
 const idle = "text-stone-700 hover:bg-stone-200/70 hover:text-stone-900";
 const lit = "bg-brand-100 text-brand";
 
-// `staff` is whether to show the Staff entry: only a System Admin manages staff.
+// `staff` is whether to show the Staff entry: Owners and the System Admin manage staff.
 export function Nav({ staff }: { staff: boolean }) {
   const here = usePlace();
   // The section you are in is the one that is open. Arrows clicked by hand
@@ -139,7 +139,7 @@ export function Nav({ staff }: { staff: boolean }) {
   return (
     <nav className="flex min-h-0 flex-col gap-0.5 overflow-y-auto">
       {menu
-        // Staff accounts and the activity log are for a System Admin only.
+        // Staff accounts and the activity log are for Owners and the System Admin.
         .filter((entry) => staff || (entry.label !== "Staff" && entry.label !== "Activity Log"))
         .map((entry) => {
         const inside = here.section === entry.label;

@@ -422,7 +422,7 @@ export async function editOrder(
 
   // The rest of the details: only sent by, and only taken from, an admin.
   const full = form.has("name");
-  if (full && user.role !== "owner") return { error: "Only a System Admin can change these details." };
+  if (full && user.role === "staff") return { error: "Only an Owner or the System Admin can change these details." };
   const name = text(form, "name");
   const phone = cleanPhone(text(form, "phone")) || null;
   const phone2 = cleanPhone(text(form, "phone2")) || null;
@@ -570,7 +570,7 @@ export async function deleteOrder(
   form: FormData,
 ): Promise<ActionState> {
   const user = await requireUser();
-  if (user.role !== "owner") return { error: "Only a System Admin can delete an order." };
+  if (user.role === "staff") return { error: "Only an Owner or the System Admin can delete an order." };
   if (!isUuid(orderId)) return { error: "Order not found." };
   const restock = form.get("restock") === "on";
 
@@ -1145,7 +1145,7 @@ export async function editOrderItems(
   form: FormData,
 ): Promise<ActionState> {
   const user = await requireUser();
-  if (user.role !== "owner") return { error: "Only a System Admin can change an order's items." };
+  if (user.role === "staff") return { error: "Only an Owner or the System Admin can change an order's items." };
   if (!isUuid(orderId)) return { error: "Order not found." };
   const lines = readLines(form);
   if (!lines) return { error: "Something is wrong with the items. Please check them." };

@@ -6,6 +6,7 @@ import { db } from "@/db";
 import { users } from "@/db/schema";
 import { requireOwner } from "@/lib/auth";
 import { isUuid } from "@/lib/format";
+import { canManage } from "@/lib/roles";
 import { deleteStaff, updateStaff } from "../actions";
 import { StaffFields } from "../staff-fields";
 
@@ -26,6 +27,8 @@ export default async function EditStaffPage({ params }: PageProps<"/staff/[id]">
     .where(eq(users.id, id));
   if (!staff) notFound();
   const self = staff.id === me.id;
+  // An Owner can open their own account and Staff accounts, nobody else's.
+  if (!self && !canManage(me.role, staff.role)) notFound();
 
   return (
     <div className="max-w-2xl space-y-3">
@@ -41,7 +44,7 @@ export default async function EditStaffPage({ params }: PageProps<"/staff/[id]">
         submit="Save changes"
         className="card space-y-3 p-3"
       >
-        <StaffFields staff={staff} self={self} />
+        <StaffFields staff={staff} self={self} mine={me.role} />
       </ActionForm>
 
       {!self && (

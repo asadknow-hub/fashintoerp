@@ -60,10 +60,10 @@ export default function AppLayout({ children }: LayoutProps<"/">) {
   );
 }
 
-// The menu, with the Staff entry for a System Admin.
+// The menu, with the Staff entry for an Owner or the System Admin.
 async function RoleNav() {
   const user = await requireUser();
-  return <Nav staff={user.role === "owner"} />;
+  return <Nav staff={user.role !== "staff"} />;
 }
 
 async function BusinessName() {
@@ -169,7 +169,7 @@ async function UserMenu() {
       <Link href="/settings" className={item}>
         <Settings className="size-4 text-stone-500" /> Settings
       </Link>
-      {user.role === "owner" && (
+      {user.role !== "staff" && (
         <Link href="/staff" className={item}>
           <UserCog className="size-4 text-stone-500" /> Staff
         </Link>

@@ -94,7 +94,7 @@ export default async function DashboardPage() {
       .where(eq(users.id, user.id)),
   ]);
   const reminders =
-    user.role === "owner"
+    user.role !== "staff"
       ? [
           care?.backupDue && care.hasData
             ? "You haven't downloaded a safety copy of your data in the last 7 days."

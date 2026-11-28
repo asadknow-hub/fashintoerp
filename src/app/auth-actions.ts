@@ -91,7 +91,8 @@ export async function setup(
     await tx.insert(settings).values({ id: 1, businessName, timezone });
     const [user] = await tx
       .insert(users)
-      .values({ name, email, passwordHash, role: "owner" })
+      // Whoever sets the system up is its System Admin.
+      .values({ name, email, passwordHash, role: "admin" })
       .returning({ id: users.id });
     return user.id;
   });

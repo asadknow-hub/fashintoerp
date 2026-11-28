@@ -37,7 +37,6 @@ export const settings = pgTable("settings", {
 
 /* ---------- Team & login ---------- */
 
-export const userRole = pgEnum("user_role", ["owner", "staff"]);
 
 export const users = pgTable("users", {
   id: id(),
@@ -46,7 +45,8 @@ export const users = pgTable("users", {
   passwordHash: text("password_hash").notNull(),
   // Scrambled one-time code for getting back in after a forgotten password.
   recoveryHash: text("recovery_hash"),
-  role: userRole("role").notNull().default("staff"),
+  // "admin" is the one System Admin, "owner" a partner. See src/lib/roles.ts.
+  role: text("role", { enum: ["admin", "owner", "staff"] }).notNull().default("staff"),
   active: boolean("active").notNull().default(true),
   createdAt: createdAt(),
 }).enableRLS();

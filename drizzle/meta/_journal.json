@@ -141,6 +141,13 @@
       "when": 1795799234461,
       "tag": "0019_audit_log",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1795864455033,
+      "tag": "0020_roles",
+      "breakpoints": true
     }
   ]
 }
