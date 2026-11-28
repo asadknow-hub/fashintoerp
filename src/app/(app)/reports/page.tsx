@@ -1,5 +1,14 @@
-import { and, eq, inArray, isNull, lte, notInArray, sql } from "drizzle-orm";
-import { Coins, Package, ShoppingCart, TrendingUp, Truck, Undo2, Wallet } from "lucide-react";
+import { and, eq, isNull, lte, sql } from "drizzle-orm";
+import {
+  Coins,
+  Package,
+  PiggyBank,
+  ShoppingCart,
+  TrendingUp,
+  Truck,
+  Undo2,
+  Wallet,
+} from "lucide-react";
 import Link from "next/link";
 import { Block, PageHeader } from "@/components/ui";
 import { db } from "@/db";
@@ -14,13 +23,12 @@ import {
 import { requireUser } from "@/lib/auth";
 import { formatMoney } from "@/lib/format";
 import {
-  courierCharges,
-  courierCollected,
+  countsAsSale,
   customerRefund,
   itemShares,
   orderAmount,
-  orderIncome,
-  settledAt,
+  periodMoney,
+  periodStart,
 } from "@/lib/order-amount";
 import { getPrefs } from "@/lib/settings";
 
@@ -34,30 +42,35 @@ const periods = [
 // The business in numbers: what sold, what it brought in, and what the stock
 // on the shelf is worth.
 export default async function ReportsPage({ searchParams }: PageProps<"/reports">) {
-  const [, params, { currency }] = await Promise.all([requireUser(), searchParams, getPrefs()]);
+  const [, params, { currency, timezone }] = await Promise.all([
+    requireUser(),
+    searchParams,
+    getPrefs(),
+  ]);
   const period = periods.find((p) => p.key === params.period) ?? periods[1];
-  // Orders that count as sales: not cancelled, not returned, inside the period.
+  // Whole days in the business's own time zone, today included.
+  const since = periodStart(period.days, timezone);
+  // Orders that count as sales, taken inside the period.
   const counted = and(
-    notInArray(orders.status, ["cancelled", "returned"]),
-    // An exchange replaces pieces already sold; its COD is the delivery charge.
-    isNull(orders.exchangeOfId),
-    period.days === null
-      ? undefined
-      : sql`${orders.createdAt} >= now() - make_interval(days => ${period.days})`,
+    countsAsSale,
+    since === null ? undefined : sql`${orders.createdAt} >= ${since}`,
   );
+  // The money of the period, each amount on the day it happened.
+  const money = periodMoney(since);
 
-  // Orders whose money is settled in the period: delivered, returned or
-  // cancelled. The delivery company collects the money, keeps its charges,
-  // and pays over the rest.
-  const settled = and(
-    inArray(orders.status, ["delivered", "returned", "cancelled"]),
-    period.days === null
-      ? undefined
-      : sql`${settledAt} >= now() - make_interval(days => ${period.days})`,
-  );
-
-  const [[sales], [pieces], [stock], [paid], [low], best, payouts, [earned], [returns]] =
-    await Promise.all([
+  const [
+    [sales],
+    [pieces],
+    [stock],
+    [paid],
+    [low],
+    best,
+    payouts,
+    [earned],
+    [returns],
+    [owed],
+    [goods],
+  ] = await Promise.all([
     db
       .select({
         orders: sql<number>`count(*)::int`,
@@ -96,47 +109,64 @@ export default async function ReportsPage({ searchParams }: PageProps<"/reports"
       from (${itemShares}) s
       join variants v on v.id = s.variant_id
       join products p on p.id = v.product_id
-      where s.status not in ('cancelled', 'returned') and s.exchange_of_id is null
-        ${period.days === null ? sql`` : sql`and s.created_at >= now() - make_interval(days => ${period.days})`}
+      where s.counts
+        ${since === null ? sql`` : sql`and s.created_at >= ${since}`}
       group by p.id, p.name
       order by sum(s.quantity) desc, p.name
       limit 10`),
     db
       .select({
         company: sql<string>`coalesce(${deliveryCompanies.name}, 'No company chosen')`,
-        orders: sql<number>`(count(*) filter (where ${orders.status} = 'delivered'))::int`,
-        cod: sql<string>`coalesce(sum(${courierCollected}), 0)`,
-        charges: sql<string>`coalesce(sum(${courierCharges}), 0)`,
+        orders: money.deliveredOrders,
+        cod: money.collected,
+        charges: money.charges,
       })
       .from(orders)
       .leftJoin(deliveryCompanies, eq(deliveryCompanies.id, orders.deliveryCompanyId))
-      .where(settled)
+      .where(money.touched)
       .groupBy(deliveryCompanies.id, deliveryCompanies.name)
-      .having(
-        sql`sum(${courierCollected}) <> 0 or sum(${courierCharges}) <> 0
-          or count(*) filter (where ${orders.status} = 'delivered') > 0`,
-      )
+      .having(sql`${money.collected} <> 0 or ${money.charges} <> 0 or ${money.deliveredOrders} > 0`)
       .orderBy(deliveryCompanies.name),
-    // What the business earned: payouts, less COD given back on returns.
+    // What the business earned: money in for delivered orders, less the
+    // delivery companies' charges, less what was sent back on returns.
     db
-      .select({
-        income: sql<string>`coalesce(sum(${orderIncome}), 0)`,
-        delivered: sql<number>`(count(*) filter (where ${orders.status} = 'delivered'))::int`,
-      })
+      .select({ income: money.income, delivered: money.deliveredOrders })
       .from(orders)
-      .where(settled),
-    // Returns in the period: what goes back to customers and what it costs.
+      .where(money.touched),
+    // Returns made in the period: what goes back to customers and what it costs.
     db
       .select({
         orders: sql<number>`count(*)::int`,
         refunds: sql<string>`coalesce(sum(${customerRefund}), 0)`,
-        unsent: sql<string>`coalesce(sum(${customerRefund}) filter (where ${orders.refundSentAt} is null), 0)`,
         covered: sql<string>`coalesce(sum(${orders.returnFee}), 0)`,
         charges: sql<string>`coalesce(sum(${orders.returnCharge}), 0)`,
       })
       .from(orders)
-      .where(and(settled, eq(orders.status, "returned"))),
+      .where(money.returned),
+    // Refunds not sent yet, however long ago the return was: money still owed.
+    db
+      .select({
+        orders: sql<number>`count(*)::int`,
+        unsent: sql<string>`coalesce(sum(${customerRefund}), 0)`,
+      })
+      .from(orders)
+      .where(and(eq(orders.status, "returned"), isNull(orders.refundSentAt), sql`${customerRefund} > 0`)),
+    // What the goods cost: the pieces of orders delivered in the period, less
+    // the pieces that came back into stock in it. Pieces with no cost
+    // recorded can't be counted and are reported as such.
+    db.execute<{ out: string; back: string; unknown: number }>(sql`
+      select
+        coalesce(sum(i.quantity * i.unit_cost) filter (where ${money.delivered}), 0) as out,
+        coalesce(sum(i.quantity * i.unit_cost) filter (
+          where i.back_state = 'stock' and ${since === null ? sql`true` : sql`i.back_at >= ${since}`}
+        ), 0) as back,
+        coalesce(sum(i.quantity) filter (where ${money.delivered} and i.unit_cost is null), 0)::int as unknown
+      from order_items i
+      join orders on orders.id = i.order_id
+      where orders.delivered_at is not null`),
   ]);
+  const goodsCost = Number(goods.out) - Number(goods.back);
+  const profit = Number(earned.income) - goodsCost;
   const payoutTotal = payouts.reduce(
     (sum, row) => ({
       orders: sum.orders + row.orders,
@@ -164,6 +194,17 @@ export default async function ReportsPage({ searchParams }: PageProps<"/reports"
       tone: "bg-emerald-50 border-emerald-100",
       iconTone: "bg-emerald-100 text-emerald-600",
       href: "/orders?status=delivered",
+    },
+    {
+      label: "Profit",
+      value: formatMoney(profit, currency),
+      note:
+        `Income less ${formatMoney(goodsCost, currency)} cost of goods` +
+        (goods.unknown > 0 ? ` · ${goods.unknown} pcs have no cost` : ""),
+      icon: PiggyBank,
+      tone: "bg-amber-50 border-amber-100",
+      iconTone: "bg-amber-100 text-amber-600",
+      href: "/purchases",
     },
     {
       label: "Units Sold",
@@ -206,7 +247,7 @@ export default async function ReportsPage({ searchParams }: PageProps<"/reports"
         ))}
       </div>
 
-      <div className="mb-3 grid grid-cols-2 gap-3 lg:grid-cols-4" data-report-cards>
+      <div className="mb-3 grid grid-cols-2 gap-3 lg:grid-cols-5" data-report-cards>
         {cards.map((card) => (
           <Link
             key={card.label}
@@ -344,7 +385,7 @@ export default async function ReportsPage({ searchParams }: PageProps<"/reports"
             {[
               ["Returned orders", String(returns.orders)],
               ["Refunds to customers", formatMoney(returns.refunds, currency)],
-              ["Refunds still to send", formatMoney(returns.unsent, currency)],
+              ["Refunds still to send (all time)", formatMoney(owed.unsent, currency)],
               ["Return charges", formatMoney(returns.charges, currency)],
               ["Covered by customers", formatMoney(returns.covered, currency)],
             ].map(([label, value]) => (

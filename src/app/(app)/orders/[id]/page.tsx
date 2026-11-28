@@ -453,6 +453,12 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
                 .reduce((sum, item) => sum + item.quantity, 0)}
               exchangedWith={swappedWith ? orderName(swappedWith.ref, swappedWith.number) : null}
               currency={currency}
+              days={{
+                delivered: order.deliveredAt ? dayIn(order.deliveredAt, timezone) : "",
+                returned: order.returnedAt ? dayIn(order.returnedAt, timezone) : "",
+                cancelled: order.cancelledAt ? dayIn(order.cancelledAt, timezone) : "",
+                today: dayIn(new Date(), timezone),
+              }}
             />
           </div>
         )}
@@ -814,6 +820,14 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
                     <Link href={`/orders/${replaces.id}`} className="font-semibold text-brand underline">
                       {orderName(replaces.ref, replaces.number)}
                     </Link>
+                    {/* The pieces at today's prices come off here; what the
+                        customer really paid back then can differ. */}
+                    {order.refundBase !== null &&
+                      Math.abs(Number(order.refundBase) - discount) > 0.004 && (
+                        <span className="block text-xs text-stone-500">
+                          The customer paid {money(order.refundBase)} there.
+                        </span>
+                      )}
                   </dt>
                   <dd className="shrink-0 font-semibold text-emerald-700">− {money(discount)}</dd>
                 </div>

@@ -51,6 +51,18 @@ const todayIn = (timezone: string) =>
     day: "2-digit",
   }).format(new Date());
 
+// A day picked in a form: empty, or a real day that is not in the future.
+function readDay(form: FormData, field: string, what: string, timezone: string) {
+  const typed = text(form, field);
+  if (typed === "") return { date: null };
+  const real =
+    /^\d{4}-\d{2}-\d{2}$/.test(typed) &&
+    new Date(typed + "T00:00:00Z").toISOString().slice(0, 10) === typed;
+  if (!real) return { error: `Choose a real ${what}.` };
+  if (typed > todayIn(timezone)) return { error: `The ${what} can't be in the future.` };
+  return { date: typed };
+}
+
 // A date picked for an order: empty, or a real day that is not in the future.
 function readOrderDate(form: FormData, timezone: string) {
   const typed = text(form, "orderDate");
@@ -243,16 +255,23 @@ export async function createOrder(
           size: variants.size,
           color: variants.color,
           stock: variants.stock,
+          cost: variants.cost,
           name: products.name,
+          archived: products.archived,
         })
         .from(variants)
         .innerJoin(products, eq(products.id, variants.productId))
         .where(inArray(variants.id, [...wanted.keys()]))
+        // Always in the same order, so two orders can't wait on each other.
+        .orderBy(variants.id)
         .for("update", { of: variants });
       if (found.length !== wanted.size) {
         throw new StockError("One of the items no longer exists.");
       }
       for (const item of found) {
+        if (item.archived) {
+          throw new StockError(`${item.name} is no longer on sale. Take it off the order.`);
+        }
         const quantity = wanted.get(item.id)!;
         if (quantity > item.stock) {
           const what = `${item.name} · ${variantLabel(item)}`;
@@ -315,9 +334,16 @@ export async function createOrder(
         })
         .returning({ id: orders.id, number: orders.number });
 
-      await tx
-        .insert(orderItems)
-        .values(lines.map((line) => ({ ...line, orderId: order.id })));
+      // What each piece cost the business today is kept on the line, so
+      // profit can be worked out later whatever stock costs by then.
+      const costNow = new Map(found.map((item) => [item.id, item.cost]));
+      await tx.insert(orderItems).values(
+        lines.map((line) => ({
+          ...line,
+          orderId: order.id,
+          unitCost: Number(costNow.get(line.variantId)) > 0 ? costNow.get(line.variantId) : null,
+        })),
+      );
       for (const line of lines) {
         await changeStock(tx, {
           variantId: line.variantId,
@@ -481,6 +507,8 @@ export async function editOrder(
       if (picked.date) changed("date", dayWas, picked.date);
 
       let details = {};
+      // What the customer pays for the goods, when that was edited.
+      let paidNow: string | null = null;
       if (full) {
         // The order follows the mobile number: if it now belongs to another
         // customer the order moves to them, otherwise this customer is corrected.
@@ -530,6 +558,10 @@ export async function editOrder(
           total: (Number(items.net) + Number(shippingFee)).toFixed(2),
           instruction: optional(form, "instruction"),
         };
+        paidNow =
+          Number(codAmount) > 0 || order.exchangeOfId
+            ? codAmount
+            : (Number(items.net) + Number(shippingFee)).toFixed(2);
       }
 
       await tx
@@ -543,6 +575,18 @@ export async function editOrder(
           }),
         })
         .where(eq(orders.id, orderId));
+      // What the customer paid here is what a return of the order that
+      // replaced it (and of any further exchange) gives back.
+      if (paidNow !== null && !order.exchangeOfId) {
+        const paid = paidNow;
+        await tx.execute(sql`
+          with recursive chain as (
+            select x.id from orders x where x.exchange_of_id = ${orderId}
+            union all
+            select y.id from orders y join chain c on y.exchange_of_id = c.id
+          )
+          update orders set refund_base = ${paid} where id in (select id from chain)`);
+      }
     });
   } catch (err) {
     if (err instanceof StockError) return { error: err.message };
@@ -799,6 +843,13 @@ export async function setOrderProgress(
         companyName = company.name;
       }
       const status = delivered ? "delivered" : dispatched ? "shipped" : portal ? "confirmed" : "new";
+      // Back on its way: nothing of it is "not coming back" any more.
+      if (order.status === "delivered" && !delivered) {
+        await tx
+          .update(orderItems)
+          .set({ backState: null, backAt: null })
+          .where(and(eq(orderItems.orderId, orderId), eq(orderItems.backState, "none")));
+      }
       moved = { from: order.status, to: status, company: companyName };
       await tx
         .update(orders)
@@ -916,6 +967,10 @@ export async function cancelOrder(
         .update(orders)
         .set({ status: "cancelled", cancelledAt: sql`now()`, cancelFee: fee })
         .where(eq(orders.id, orderId));
+      await tx
+        .update(orderItems)
+        .set({ backState: null, backAt: null })
+        .where(and(eq(orderItems.orderId, orderId), eq(orderItems.backState, "none")));
       wasOut = isOut(order);
     });
   } catch (err) {
@@ -1003,6 +1058,12 @@ export async function createReturn(
           refundSentAt: null,
         })
         .where(eq(orders.id, orderId));
+      // A piece marked "not coming back" during an earlier exchange is on
+      // its way back now.
+      await tx
+        .update(orderItems)
+        .set({ backState: null, backAt: null })
+        .where(and(eq(orderItems.orderId, orderId), eq(orderItems.backState, "none")));
     });
   } catch (err) {
     if (err instanceof StockError) return { error: err.message };
@@ -1230,6 +1291,28 @@ export async function correctJourney(
     }
   }
 
+  // The real day of each step can be given; left alone, a step keeps the
+  // date it has, and a new step is dated now.
+  const { timezone } = await getPrefs();
+  const days: Record<"deliveredOn" | "returnedOn" | "cancelledOn", string | null> = {
+    deliveredOn: null,
+    returnedOn: null,
+    cancelledOn: null,
+  };
+  for (const [field, what, used] of [
+    ["deliveredOn", "delivery date", reached],
+    ["returnedOn", "return date", target === "returned"],
+    ["cancelledOn", "cancellation date", target === "cancelled"],
+  ] as const) {
+    if (!used) continue;
+    const picked = readDay(form, field, what, timezone);
+    if ("error" in picked) return { error: picked.error };
+    days[field] = picked.date;
+  }
+  if (days.deliveredOn && days.returnedOn && days.returnedOn < days.deliveredOn) {
+    return { error: "The return date can't be before the delivery date." };
+  }
+
   let log: { subject: string; from: Status; pieces: string } | null = null;
   try {
     await db.transaction(async (tx) => {
@@ -1238,6 +1321,7 @@ export async function correctJourney(
           status: orders.status,
           number: orders.number,
           ref: orders.trackingNumber,
+          dispatchedAt: orders.dispatchedAt,
           payment: orders.payment,
           codAmount: orders.codAmount,
           total: orders.total,
@@ -1267,7 +1351,9 @@ export async function correctJourney(
         const [original] = await tx
           .select({ status: orders.status })
           .from(orders)
-          .where(eq(orders.id, order.exchangeOfId));
+          .where(eq(orders.id, order.exchangeOfId))
+          // Held still, so it can't be returned or reopened at this very moment.
+          .for("update");
         const again = await liveExchange(tx, order.exchangeOfId);
         if (!original || original.status !== "delivered" || again) {
           throw new StockError(
@@ -1328,6 +1414,33 @@ export async function correctJourney(
           .update(orderItems)
           .set({ backState: null, backAt: null })
           .where(eq(orderItems.orderId, orderId));
+      } else if (!open && sentOut && order.dispatchedAt === null) {
+        // It was recorded as never sent out, so its pieces were put straight
+        // back into stock; in truth the parcel left. They come out again and
+        // are awaited back like any other parcel on its way home.
+        for (const item of items) {
+          if (item.backState !== "stock") continue;
+          try {
+            await changeStock(tx, {
+              variantId: item.variantId,
+              change: -item.quantity,
+              reason: "sale",
+              note: `Order ${name}: journey corrected`,
+              orderId,
+              userId: user.id,
+            });
+          } catch (err) {
+            if (!(err instanceof StockError)) throw err;
+            throw new StockError(
+              `Pieces of this order were put back into stock and have been sold since. ${err.message}`,
+            );
+          }
+          takenOut += item.quantity;
+          await tx
+            .update(orderItems)
+            .set({ backState: null, backAt: null })
+            .where(eq(orderItems.id, item.id));
+        }
       } else if (!open && !sentOut) {
         // Cancelled before it left: the pieces never went anywhere.
         for (const item of items) {
@@ -1350,6 +1463,15 @@ export async function correctJourney(
 
       // A step that already has its date keeps it; a new one is dated now.
       const kept = (column: AnyColumn) => sql`coalesce(${column}, now())`;
+      // With a day given: that day (at noon, in the business's time zone),
+      // unless the step already has a time on that very day.
+      const dated = (column: AnyColumn, day: string | null) =>
+        day === null
+          ? kept(column)
+          : sql`case
+              when (${column} at time zone ${timezone})::date = ${day}::date then ${column}
+              else ((${day}::date + time '12:00') at time zone ${timezone})
+            end`;
       await tx
         .update(orders)
         .set({
@@ -1360,19 +1482,19 @@ export async function correctJourney(
             ? {}
             : { portalAt: withCompany ? kept(orders.portalAt) : null }),
           dispatchedAt: sentOut ? kept(orders.dispatchedAt) : null,
-          deliveredAt: reached ? kept(orders.deliveredAt) : null,
+          deliveredAt: reached ? dated(orders.deliveredAt, days.deliveredOn) : null,
           ...(withCompany
             ? { deliveryCompanyId: companyId }
             : target === "new"
               ? { deliveryCompanyId: null }
               : {}),
           deliveryCharge: charge,
-          returnedAt: target === "returned" ? kept(orders.returnedAt) : null,
+          returnedAt: target === "returned" ? dated(orders.returnedAt, days.returnedOn) : null,
           returnFee,
           returnCharge,
           // A refund already sent stays sent while the order stays returned.
           ...(target === "returned" && order.status === "returned" ? {} : { refundSentAt: null }),
-          cancelledAt: target === "cancelled" ? kept(orders.cancelledAt) : null,
+          cancelledAt: target === "cancelled" ? dated(orders.cancelledAt, days.cancelledOn) : null,
           cancelFee,
         })
         .where(eq(orders.id, orderId));
@@ -1492,11 +1614,14 @@ export async function editOrderItems(
           size: variants.size,
           color: variants.color,
           stock: variants.stock,
+          cost: variants.cost,
           name: products.name,
         })
         .from(variants)
         .innerJoin(products, eq(products.id, variants.productId))
         .where(inArray(variants.id, touched))
+        // Always in the same order, so two changes can't wait on each other.
+        .orderBy(variants.id)
         .for("update", { of: variants });
       if (found.length !== touched.length) throw new StockError("One of the items no longer exists.");
       const name = orderName(order.ref, order.number);
@@ -1519,7 +1644,21 @@ export async function editOrderItems(
       }
 
       await tx.delete(orderItems).where(eq(orderItems.orderId, orderId));
-      await tx.insert(orderItems).values(lines.map((line) => ({ ...line, orderId })));
+      // A piece that was already on the order keeps the cost it had then; a
+      // newly added one takes today's.
+      const costWas = new Map(before.map((item) => [item.variantId, item.unitCost]));
+      const costNow = new Map(found.map((item) => [item.id, item.cost]));
+      await tx.insert(orderItems).values(
+        lines.map((line) => ({
+          ...line,
+          orderId,
+          unitCost: costWas.has(line.variantId)
+            ? costWas.get(line.variantId)
+            : Number(costNow.get(line.variantId)) > 0
+              ? costNow.get(line.variantId)
+              : null,
+        })),
+      );
       const subtotal = lines.reduce((sum, line) => sum + lineTotal(line), 0);
       await tx
         .update(orders)

@@ -37,7 +37,11 @@ export function CorrectJourney({
   piecesBack,
   exchangedWith,
   currency,
+  days,
 }: {
+  // The day each step is recorded on now (as 2026-11-28, empty when it has
+  // none), and today: no step can be dated later than that.
+  days: { delivered: string; returned: string; cancelled: string; today: string };
   orderId: string;
   name: string;
   // The order's status as stored, to notice someone else changing it meanwhile.
@@ -97,12 +101,27 @@ export function CorrectJourney({
   const wasClosed = current === "cancelled" || current === "returned";
   const stock = closing
     ? leftBuilding
-      ? "Its pieces are on their way back: mark each one on this page when it arrives. Pieces already marked stay as they are."
+      ? piecesBack > 0 && !sentOut
+        ? `The parcel did leave, so the ${piecesBack} ${piecesBack === 1 ? "piece" : "pieces"} put back into stock ${piecesBack === 1 ? "comes" : "come"} out again. Mark each one on this page when it arrives.`
+        : "Its pieces are on their way back: mark each one on this page when it arrives. Pieces already marked stay as they are."
       : "Its pieces go back into stock now."
     : piecesBack > 0 && (wasClosed || target !== "delivered")
       ? `${piecesBack} ${piecesBack === 1 ? "piece that was" : "pieces that were"} put back into stock for this order ${piecesBack === 1 ? "is" : "are"} taken out again.`
       : "Stock does not change.";
 
+  const day = (name: string, label: string, recorded: string) => (
+    <label className="block">
+      <span className="label">{label}</span>
+      <input
+        type="date"
+        name={name}
+        aria-label={label}
+        defaultValue={recorded || days.today}
+        max={days.today}
+        className="input"
+      />
+    </label>
+  );
   const box = "mt-0.5 size-4 shrink-0 accent-[#5b4fd9]";
   const number = "input max-w-40 tabular-nums";
 
@@ -294,6 +313,14 @@ export function CorrectJourney({
                         className={number}
                       />
                     </label>
+                  </div>
+                )}
+
+                {(reached || target === "cancelled") && (
+                  <div className="grid gap-3 sm:grid-cols-2" data-journey-days>
+                    {reached && day("deliveredOn", "Delivered on", days.delivered)}
+                    {target === "returned" && day("returnedOn", "Returned on", days.returned)}
+                    {target === "cancelled" && day("cancelledOn", "Cancelled on", days.cancelled)}
                   </div>
                 )}
 

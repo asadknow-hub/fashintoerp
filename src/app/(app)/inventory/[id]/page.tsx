@@ -167,9 +167,7 @@ export default async function ProductPage({ params }: PageProps<"/inventory/[id]
       select coalesce(sum(s.share), 0) as revenue
       from (${itemShares}) s
       join variants v on v.id = s.variant_id
-      where v.product_id = ${id}
-        and s.status not in ('cancelled', 'returned')
-        and s.exchange_of_id is null`),
+      where v.product_id = ${id} and s.counts`),
     db
       .selectDistinct({ category: products.category })
       .from(products)
@@ -210,7 +208,8 @@ export default async function ProductPage({ params }: PageProps<"/inventory/[id]
     : available
       ? shelfCost / available
       : Number(items[0]?.cost ?? 0);
-  const inventoryValue = paidUnits ? available * averageCost : shelfCost;
+  // The same sum Reports and the stock list use: each piece at its cost.
+  const inventoryValue = shelfCost;
 
   const prices = [...new Set(items.map((v) => Number(v.price)))];
 

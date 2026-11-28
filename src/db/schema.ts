@@ -402,6 +402,10 @@ export const orderItems = pgTable(
     // Taken off this line by a multi-piece price, so the line comes to
     // quantity × unit price − discount.
     discount: money("discount").notNull().default("0"),
+    // What one piece cost the business when the order was taken, so profit
+    // can be worked out later whatever stock costs by then. Empty when the
+    // cost was not known.
+    unitCost: money("unit_cost"),
     // For pieces that are on their way back (a return, an exchange, a parcel
     // refused at the door): what happened to them once they arrived.
     // Empty = not here yet, "stock" = put back into stock, "discarded" =

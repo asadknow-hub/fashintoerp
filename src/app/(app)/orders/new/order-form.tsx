@@ -1028,7 +1028,11 @@ function Editor({
             ? "Choose the country, city and area."
             : codWrong
               ? "Enter the COD amount as a number."
-              : refNow?.usedBy
+              : // An exchange is never charged the price of its pieces: its
+                // COD is the delivery charge, and has to be said.
+                defaults.exchange && cod.trim() === ""
+                ? "Type the COD for this exchange: the delivery charge the customer pays (0 if none)."
+                : refNow?.usedBy
                 ? `${fullRef} is already used on another order.`
                 : orderDate > today
                   ? "The order date can't be in the future."

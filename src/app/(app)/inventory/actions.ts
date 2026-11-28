@@ -1,9 +1,9 @@
 "use server";
 
-import { and, eq, inArray, like, or } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, like, or, sql } from "drizzle-orm";
 import { refresh } from "next/cache";
 import type { ActionState } from "@/components/action-form";
-import { db } from "@/db";
+import { db, type Tx } from "@/db";
 import {
   productMedia,
   products,
@@ -625,6 +625,26 @@ export async function adjustStockGrid(
 
 /* ---------- What stock was bought for ---------- */
 
+// One cost rule, used by every page: a piece of a product costs what its
+// purchase batches cost on average (all the money paid ÷ all the pieces
+// bought, over the batches that have an amount). Every size and color of the
+// product is given that cost, each time a batch is added, changed or
+// deleted. While no batch has an amount, costs typed by hand stay.
+async function recost(tx: Tx, productId: string) {
+  const [paid] = await tx
+    .select({
+      total: sql<string | null>`sum(${stockPurchases.totalCost})`,
+      units: sql<number | null>`sum(${stockPurchases.units})::int`,
+    })
+    .from(stockPurchases)
+    .where(and(eq(stockPurchases.productId, productId), isNotNull(stockPurchases.totalCost)));
+  if (!paid?.units || paid.total === null) return;
+  await tx
+    .update(variants)
+    .set({ cost: (Number(paid.total) / paid.units).toFixed(2) })
+    .where(eq(variants.productId, productId));
+}
+
 // Saves a purchase batch from its pop-up: who it came from, what was paid,
 // and how many pieces of each size and color. A new batch adds those pieces
 // to stock. Changing the numbers of a saved batch moves stock by the
@@ -683,6 +703,7 @@ export async function saveBatch(
           .update(stockPurchases)
           .set({ units, totalCost, note })
           .where(eq(stockPurchases.id, batch.id));
+        await recost(tx, productId);
         return;
       }
 
@@ -743,15 +764,7 @@ export async function saveBatch(
         .insert(stockPurchaseLines)
         .values(lines.map((line) => ({ ...line, purchaseId: purchaseId! })));
 
-      // Items that had no cost yet take theirs from this batch.
-      if (totalCost !== null) {
-        const each = (Number(totalCost) / units).toFixed(2);
-        for (const item of items) {
-          if (Number(item.cost) === 0 && lines.some((line) => line.variantId === item.id)) {
-            await tx.update(variants).set({ cost: each }).where(eq(variants.id, item.id));
-          }
-        }
-      }
+      await recost(tx, productId);
     });
   } catch (err) {
     if (err instanceof StockError) return { error: err.message };
@@ -815,6 +828,7 @@ export async function deletePurchase(purchaseId: string): Promise<ActionState> {
         }
       }
       await tx.delete(stockPurchases).where(eq(stockPurchases.id, batch.id));
+      await recost(tx, batch.productId);
     });
   } catch (err) {
     if (err instanceof StockError) return { error: err.message };

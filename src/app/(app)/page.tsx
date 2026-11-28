@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNull, lte, notInArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, lte, sql } from "drizzle-orm";
 import { Package, TrendingUp, TriangleAlert, Truck } from "lucide-react";
 import Link from "next/link";
 import {
@@ -19,7 +19,7 @@ import {
 } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
 import { formatDate, formatMoney, orderName, variantLabel } from "@/lib/format";
-import { orderAmount } from "@/lib/order-amount";
+import { countsAsSale, orderAmount, periodStart } from "@/lib/order-amount";
 import { getPrefs } from "@/lib/settings";
 
 export default async function DashboardPage() {
@@ -33,11 +33,8 @@ export default async function DashboardPage() {
       })
       .from(orders)
       .where(
-        and(
-          sql`${orders.createdAt} >= now() - interval '7 days'`,
-          notInArray(orders.status, ["cancelled", "returned"]),
-          isNull(orders.exchangeOfId),
-        ),
+        // Today and the six days before it, in the business's time zone.
+        and(sql`${orders.createdAt} >= ${periodStart(7, timezone)}`, countsAsSale),
       ),
     db
       .select({ count: sql<number>`count(*)::int` })

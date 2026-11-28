@@ -1,4 +1,4 @@
-import { sql } from "drizzle-orm";
+import { type SQL, sql } from "drizzle-orm";
 import { orders } from "@/db/schema";
 
 // What an order brings in: the cash collected on delivery, or, for an order
@@ -7,10 +7,37 @@ import { orders } from "@/db/schema";
 // paid beforehand, the goods were paid for on the order it replaces.)
 export const orderAmount = sql<string>`case when ${orders.payment} = 'cod' or ${orders.exchangeOfId} is not null then ${orders.codAmount} else ${orders.total} end`;
 
+// Was an order that replaced this one in an exchange (or one further down
+// the chain) returned in the end? Then nothing was sold after all: the
+// customer got their money back.
+export const exchangeReturned = (id: SQL) => sql`exists (
+  with recursive chain as (
+    select x.id, x.status from orders x
+    where x.exchange_of_id = ${id} and x.status <> 'cancelled'
+    union all
+    select y.id, y.status from orders y
+    join chain c on y.exchange_of_id = c.id
+    where y.status <> 'cancelled'
+  )
+  select 1 from chain where status = 'returned'
+)`;
+
+// An order that counts as a sale: not cancelled, not returned, not an
+// exchange (that replaces pieces already sold; its COD is only the delivery
+// charge), and not an order whose exchange was returned in the end.
+// (The order's own id is written out in full so it can never be mistaken
+// for a column of the orders looked at inside.)
+export const countsAsSale = sql`(
+  ${orders.status} not in ('cancelled', 'returned')
+  and ${orders.exchangeOfId} is null
+  and not ${exchangeReturned(sql.raw('"orders"."id"'))}
+)`;
+
 // One row per line of an order, with `share`: that line's part of what the
-// order brought in. Revenue is the money the customer pays (the COD), not
-// the price list, so the order's amount is split over its lines by their
-// value, or by pieces when no prices were typed.
+// order brought in, and `counts`: whether the order counts as a sale.
+// Revenue is the money the customer pays (the COD), not the price list, so
+// the order's amount is split over its lines by their value, or by pieces
+// when no prices were typed.
 export const itemShares = sql`
   select
     i.order_id,
@@ -19,6 +46,11 @@ export const itemShares = sql`
     o.status,
     o.created_at,
     o.exchange_of_id,
+    (
+      o.status not in ('cancelled', 'returned')
+      and o.exchange_of_id is null
+      and not ${exchangeReturned(sql.raw("o.id"))}
+    ) as counts,
       (case when o.payment = 'cod' or o.exchange_of_id is not null then o.cod_amount else o.total end)
     * (case
         when sum(i.quantity * i.unit_price - i.discount) over w > 0
@@ -70,5 +102,56 @@ export const orderIncome = sql<string>`(
   - ${customerRefund}
 )`;
 
-// The day an order's money was settled: delivered, returned or cancelled.
-export const settledAt = sql<Date>`coalesce(${orders.returnedAt}, ${orders.cancelledAt}, ${orders.deliveredAt}, ${orders.createdAt})`;
+/* ---------- A period of time ---------- */
+
+// Where "the last N days" starts: at midnight, in the business's own time
+// zone, N − 1 days ago. So "last 7 days" is today and the six days before
+// it, whole days, not the last 168 hours. Nothing for "all time".
+export function periodStart(days: number | null, timezone: string): SQL | null {
+  if (days === null) return null;
+  return sql`((date_trunc('day', now() at time zone ${timezone}) - make_interval(days => ${days - 1})) at time zone ${timezone})`;
+}
+
+const within = (at: SQL, since: SQL | null) => (since === null ? sql`true` : sql`${at} >= ${since}`);
+
+// The money of a period, each amount counted on the day it happened: an
+// order's COD and delivery charge on the day it was delivered, a return's
+// charge and refund on the day it was returned, an opened-parcel fee on the
+// day it was cancelled. So an order delivered in one month and returned in
+// the next shows as money in for the first and money out for the second,
+// the way the delivery company's own statements have it.
+//
+// The pieces are sums: use them in a select over orders.
+export function periodMoney(since: SQL | null) {
+  const delivered = sql`(
+    ${orders.deliveredAt} is not null and ${orders.status} in ('delivered', 'returned')
+    and ${within(sql`${orders.deliveredAt}`, since)}
+  )`;
+  const returned = sql`(
+    ${orders.status} = 'returned'
+    and ${within(sql`coalesce(${orders.returnedAt}, ${orders.deliveredAt}, ${orders.createdAt})`, since)}
+  )`;
+  const cancelled = sql`(
+    ${orders.status} = 'cancelled'
+    and ${within(sql`coalesce(${orders.cancelledAt}, ${orders.createdAt})`, since)}
+  )`;
+  // What the delivery company collected from customers.
+  const collected = sql<string>`coalesce(sum(${orders.codAmount}) filter (where ${delivered}), 0)`;
+  // What it kept: delivery charges, return charges, opened-parcel fees.
+  const charges = sql<string>`(
+    coalesce(sum(${orders.deliveryCharge}) filter (where ${delivered}), 0)
+    + coalesce(sum(${orders.returnCharge}) filter (where ${returned}), 0)
+    + coalesce(sum(${orders.cancelFee}) filter (where ${cancelled}), 0)
+  )`;
+  // What went back to customers by bank transfer.
+  const refunds = sql<string>`coalesce(sum(${customerRefund}) filter (where ${returned}), 0)`;
+  // What the business earned: money in for delivered orders, less the
+  // delivery company's charges, less refunds.
+  const income = sql<string>`(
+    coalesce(sum(${orderAmount}) filter (where ${delivered}), 0) - ${charges} - ${refunds}
+  )`;
+  const deliveredOrders = sql<number>`(count(*) filter (where ${delivered} and ${orders.status} = 'delivered'))::int`;
+  // Orders with anything at all in the period.
+  const touched = sql`(${delivered} or ${returned} or ${cancelled})`;
+  return { delivered, returned, cancelled, collected, charges, refunds, income, deliveredOrders, touched };
+}
