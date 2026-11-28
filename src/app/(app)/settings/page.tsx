@@ -1,12 +1,10 @@
 import { asc, eq, sql } from "drizzle-orm";
-import { headers } from "next/headers";
 import Link from "next/link";
 import { ActionForm } from "@/components/action-form";
-import { Badge, Field, PageHeader } from "@/components/ui";
+import { Field, PageHeader } from "@/components/ui";
 import { db } from "@/db";
 import { deliveryCompanies, users } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
-import { channelStatus, webhookReady } from "@/lib/chat";
 import { CURRENCY, formatDateTime } from "@/lib/format";
 import { getSettings } from "@/lib/settings";
 import { changePassword, createRecoveryCode, updateBusiness } from "./actions";
@@ -32,29 +30,17 @@ export default async function SettingsPage() {
       .from(users)
       .where(eq(users.id, user.id)),
   ]);
-  const requestHeaders = await headers();
-  const host =
-    requestHeaders.get("x-forwarded-host") ?? requestHeaders.get("host");
-  const protocol = requestHeaders.get("x-forwarded-proto") ?? "https";
-  const webhookUrl = `${protocol}://${host}/api/webhooks/meta`;
-  const channels = channelStatus();
 
   return (
     <>
       <PageHeader title="Settings" />
-      <div className="mb-3 flex flex-wrap gap-2" data-settings-links>
-        {owner && (
+      {owner && (
+        <div className="mb-3 flex flex-wrap gap-2" data-settings-links>
           <Link href="/staff" className="btn-secondary">
             Staff and their logins
           </Link>
-        )}
-        <Link href="/inbox" className="btn-secondary">
-          Chat inbox
-        </Link>
-        <Link href="/automations" className="btn-secondary">
-          Auto replies
-        </Link>
-      </div>
+        </div>
+      )}
       <div className="grid gap-3 lg:grid-cols-2">
         {owner && (
           <section className="space-y-3">
@@ -187,7 +173,7 @@ export default async function SettingsPage() {
             </h2>
             <div className="card space-y-2 p-3">
               <p className="text-sm text-stone-600">
-                Downloads everything (products, stock, orders, customers, chats)
+                Downloads everything (products, stock, orders, customers, activity log)
                 as one file. Keep it somewhere safe, for example in your email
                 or Google Drive. Do this every week.
               </p>
@@ -196,54 +182,15 @@ export default async function SettingsPage() {
                   ? `Last downloaded: ${formatDateTime(business.lastBackupAt, business.timezone)}`
                   : "Never downloaded yet."}
               </p>
-              <a href="/api/backup" download className="btn">
-                Download backup
-              </a>
+              <form method="post" action="/api/backup">
+                <button type="submit" className="btn">
+                  Download backup
+                </button>
+              </form>
             </div>
           </section>
         )}
 
-        {owner && (
-          <section className="space-y-3">
-            <h2 className="text-sm font-bold text-stone-900">
-              Chat channels
-            </h2>
-            <div className="card divide-y divide-stone-100">
-              {(
-                [
-                  ["whatsapp", "WhatsApp"],
-                  ["instagram", "Instagram"],
-                  ["messenger", "Facebook Messenger"],
-                ] as const
-              ).map(([key, label]) => (
-                <div
-                  key={key}
-                  className="flex items-center justify-between px-3 py-1.5 text-sm"
-                >
-                  <span>{label}</span>
-                  <Badge tone={channels[key] ? "green" : "gray"}>
-                    {channels[key] ? "Connected" : "Not connected"}
-                  </Badge>
-                </div>
-              ))}
-            </div>
-            <div className="card space-y-2 p-3 text-sm text-stone-600">
-              <p>
-                Chats connect through a Meta (Facebook) business account. This
-                is a one-time setup — ask your developer or Claude to do it with
-                you.
-              </p>
-              <p className="label mt-3">Webhook address to give Meta</p>
-              <p className="rounded-lg bg-stone-50 px-3 py-2 font-mono text-xs break-all text-stone-800">
-                {webhookUrl}
-              </p>
-              <p className="text-xs">
-                Receiving messages:{" "}
-                {webhookReady() ? "ready" : "not set up yet"}.
-              </p>
-            </div>
-          </section>
-        )}
       </div>
     </>
   );

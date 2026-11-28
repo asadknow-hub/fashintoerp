@@ -69,9 +69,14 @@ export const loginAttempts = pgTable(
   {
     id: id(),
     email: text("email").notNull(),
+    // Where the try came from, so one place can't lock a person out.
+    ip: text("ip"),
     createdAt: createdAt(),
   },
-  (t) => [index("login_attempts_email_idx").on(t.email, t.createdAt)],
+  (t) => [
+    index("login_attempts_email_idx").on(t.email, t.createdAt),
+    index("login_attempts_ip_idx").on(t.ip, t.createdAt),
+  ],
 ).enableRLS();
 
 /* ---------- Inventory ---------- */

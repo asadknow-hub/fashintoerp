@@ -61,6 +61,19 @@ export function isOurUrl(url: string) {
   return false;
 }
 
+// Our file store has one address. Files already attached to products show
+// which one it is: a new file must live at the same place, not in somebody
+// else's store. (With nothing attached yet there is nothing to compare with.)
+export function sameStore(urls: string[], known: string | null | undefined) {
+  if (mediaMode() !== "blob" || !known) return true;
+  try {
+    const host = new URL(known).hostname;
+    return urls.every((url) => new URL(url).hostname === host);
+  } catch {
+    return false;
+  }
+}
+
 // Best effort: the photo is already gone from the product, so a failure here
 // only leaves an unused file behind.
 export async function removeFile(url: string) {

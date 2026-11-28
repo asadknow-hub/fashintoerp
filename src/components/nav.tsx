@@ -107,8 +107,6 @@ function place(pathname: string, params: URLSearchParams): Place {
   if (pathname === "/staff") return { section: "Staff" };
   if (pathname === "/staff/new") return { section: "Staff", page: "Add Staff" };
   if (pathname.startsWith("/staff/")) return { section: "Staff", page: "Staff Member" };
-  if (pathname.startsWith("/inbox")) return { section: "Settings", page: "Inbox" };
-  if (pathname.startsWith("/automations")) return { section: "Settings", page: "Auto Replies" };
   if (pathname.startsWith("/settings")) return { section: "Settings" };
   if (pathname.startsWith("/search")) return { section: "Search" };
   return { section: "" };

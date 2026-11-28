@@ -4,7 +4,7 @@ import { Badge, Empty, PageHeader, pageNumber, Pager } from "@/components/ui";
 import { db } from "@/db";
 import { productMedia, products, variants } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
-import { formatMoney } from "@/lib/format";
+import { formatMoney, likeTerm } from "@/lib/format";
 import { getPrefs } from "@/lib/settings";
 
 const PAGE_SIZE = 48;
@@ -65,7 +65,7 @@ export async function ProductList({
         eq(products.archived, view === "archived"),
         q
           ? or(
-              ilike(products.name, `%${q}%`),
+              ilike(products.name, likeTerm(q)),
               exists(
                 db
                   .select({ one: sql`1` })
@@ -73,7 +73,7 @@ export async function ProductList({
                   .where(
                     and(
                       eq(variants.productId, products.id),
-                      ilike(variants.sku, `%${q}%`),
+                      ilike(variants.sku, likeTerm(q)),
                     ),
                   ),
               ),

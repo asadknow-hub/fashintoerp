@@ -60,23 +60,29 @@ export function StaffFields({
             </select>
           )}
         </Field>
-        <Field
-          label={editing ? "New password" : "Password"}
-          hint={
-            editing
-              ? "Leave empty to keep the current one."
-              : "At least 8 characters. Share it with them."
-          }
-        >
-          <input
-            name="password"
-            type="text"
-            autoComplete="off"
-            required={!editing}
-            minLength={8}
-            className="input"
-          />
-        </Field>
+        {self ? (
+          <Field label="Password" hint="Change your own password in Settings.">
+            <input value="••••••••" disabled className="input bg-stone-100" />
+          </Field>
+        ) : (
+          <Field
+            label={editing ? "New password" : "Password"}
+            hint={
+              editing
+                ? "Leave empty to keep the current one."
+                : "At least 8 characters. Share it with them."
+            }
+          >
+            <input
+              name="password"
+              type="text"
+              autoComplete="off"
+              required={!editing}
+              minLength={8}
+              className="input"
+            />
+          </Field>
+        )}
       </div>
       {editing &&
         (self ? (

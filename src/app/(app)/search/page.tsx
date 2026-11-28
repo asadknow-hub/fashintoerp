@@ -10,7 +10,7 @@ import {
 import { db } from "@/db";
 import { customers, orders, productMedia, products, variants } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
-import { formatDate, formatMoney, orderName } from "@/lib/format";
+import { formatDate, formatMoney, likeTerm, orderName, phoneTerms } from "@/lib/format";
 import { getPrefs } from "@/lib/settings";
 
 // Results for the search box at the top of every page.
@@ -21,7 +21,8 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
     getPrefs(),
   ]);
   const q = typeof params.q === "string" ? params.q.trim().slice(0, 80) : "";
-  const like = `%${q}%`;
+  const like = likeTerm(q);
+  const phones = phoneTerms(q);
   const number = /^#?\d+$/.test(q) ? Number(q.replace("#", "")) : null;
 
   const [foundProducts, foundOrders, foundCustomers] = q
@@ -79,6 +80,7 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
             or(
               ilike(customers.name, like),
               ilike(customers.phone, like),
+              ...phones.map((term) => ilike(customers.phone, term)),
               ilike(orders.trackingNumber, like),
               number !== null && number < 2 ** 31 ? eq(orders.number, number) : undefined,
             ),
@@ -99,6 +101,7 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
               ilike(customers.name, like),
               ilike(customers.phone, like),
               ilike(customers.phone2, like),
+              ...phones.map((term) => ilike(customers.phone, term)),
             ),
           )
           .orderBy(desc(customers.createdAt))

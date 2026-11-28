@@ -4,7 +4,7 @@ import { Empty, PageHeader, pageNumber, Pager } from "@/components/ui";
 import { db } from "@/db";
 import { customers, orders } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
-import { formatDate, formatMoney } from "@/lib/format";
+import { formatDate, formatMoney, likeTerm, phoneTerms } from "@/lib/format";
 import { orderAmount } from "@/lib/order-amount";
 import { getPrefs } from "@/lib/settings";
 
@@ -15,12 +15,16 @@ export default async function CustomersPage({
 }: PageProps<"/customers">) {
   await requireUser();
   const params = await searchParams;
-  const q = typeof params.q === "string" ? params.q.trim() : "";
+  const q = typeof params.q === "string" ? params.q.trim().slice(0, 80) : "";
   const { currency, timezone } = await getPrefs();
 
   const page = pageNumber(params.page);
   const where = q
-    ? or(ilike(customers.name, `%${q}%`), ilike(customers.phone, `%${q}%`))
+    ? or(
+        ilike(customers.name, likeTerm(q)),
+        ilike(customers.phone, likeTerm(q)),
+        ...phoneTerms(q).map((term) => ilike(customers.phone, term)),
+      )
     : undefined;
   const [[{ total }], rows] = await Promise.all([
     db.select({ total: count() }).from(customers).where(where),

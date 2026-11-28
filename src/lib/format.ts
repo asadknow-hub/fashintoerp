@@ -106,3 +106,21 @@ export function cleanPhone(value: string) {
   const digits = value.replace(/[^\d+]/g, "");
   return digits.startsWith("+") ? "+" + digits.slice(1).replace(/\+/g, "") : digits.replace(/\+/g, "");
 }
+
+// What was typed in a search box, as a pattern for the database: at most 80
+// characters, and with the characters that mean "anything" taken literally.
+export function likeTerm(q: string) {
+  return "%" + q.trim().slice(0, 80).replace(/[\\%_]/g, "\\$&") + "%";
+}
+
+// Phone numbers are stored as plain digits ("+971501234567"). A search typed
+// with spaces or dashes, with a leading 0 or with the country code still
+// finds them: these are the patterns to look for.
+export function phoneTerms(q: string) {
+  if (/[a-z]/i.test(q)) return [];
+  const digits = q.replace(/\D/g, "").replace(/^0+/, "").slice(0, 20);
+  if (digits.length < 4) return [];
+  const terms = [digits];
+  if (digits.startsWith("971") && digits.length > 6) terms.push(digits.slice(3).replace(/^0+/, ""));
+  return terms.map((term) => `%${term}%`);
+}

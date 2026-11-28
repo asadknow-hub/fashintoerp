@@ -88,7 +88,9 @@ export async function updateStaff(
   // Your own role stays as it is; for anyone else it must be one you can give.
   const role = self ? me.role : details.role;
   if (!role) return { error: "Only the System Admin can make someone an Owner." };
-  if (details.password && details.password.length < 8) {
+  // Your own password is changed in Settings, where the current one is asked.
+  const password = self ? "" : details.password;
+  if (password && password.length < 8) {
     return { error: "New password must be at least 8 characters." };
   }
   if (await emailTaken(details.email, staffId)) {
@@ -106,16 +108,17 @@ export async function updateStaff(
       email: details.email,
       role,
       active,
-      ...(details.password && {
-        passwordHash: await hashPassword(details.password),
+      ...(password && {
+        passwordHash: await hashPassword(password),
       }),
     })
-    .where(eq(users.id, staffId))
+    // Still the role it was checked against a moment ago.
+    .where(and(eq(users.id, staffId), eq(users.role, them.role)))
     .returning({ id: users.id });
-  if (!updated) return { error: "Staff member not found." };
+  if (!updated) return { error: "This account was changed a moment ago. Open it again." };
 
   // A new password or removed access signs them out everywhere.
-  if (!self && (details.password || !active)) {
+  if (!self && (password || !active)) {
     await db.delete(sessions).where(eq(sessions.userId, staffId));
   }
   await audit(me, {
@@ -124,7 +127,7 @@ export async function updateStaff(
     subject: details.name,
     summary:
       `Edited the account ${details.email}: ${roleLabel[role]}, access ${active ? "on" : "off"}` +
-      (details.password ? ", new password set" : ""),
+      (password ? ", new password set" : ""),
   });
   redirect("/staff");
 }
@@ -137,7 +140,8 @@ export async function deleteStaff(staffId: string): Promise<ActionState> {
   if (them && !canManage(me.role, them.role)) return notYours;
   const [gone] = await db
     .delete(users)
-    .where(eq(users.id, staffId))
+    // Still the role it was checked against a moment ago.
+    .where(and(eq(users.id, staffId), eq(users.role, them?.role ?? "staff")))
     .returning({ name: users.name, email: users.email });
   if (gone) {
     await audit(me, {

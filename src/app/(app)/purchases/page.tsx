@@ -4,7 +4,7 @@ import { Empty, PageHeader, pageNumber, Pager } from "@/components/ui";
 import { db } from "@/db";
 import { products, stockPurchases, users } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
-import { formatDate, formatMoney } from "@/lib/format";
+import { formatDate, formatMoney, likeTerm } from "@/lib/format";
 import { getPrefs } from "@/lib/settings";
 
 const PAGE_SIZE = 50;
@@ -16,12 +16,12 @@ export default async function PurchasesPage({ searchParams }: PageProps<"/purcha
     searchParams,
     getPrefs(),
   ]);
-  const q = typeof params.q === "string" ? params.q.trim() : "";
+  const q = typeof params.q === "string" ? params.q.trim().slice(0, 80) : "";
   const page = pageNumber(params.page);
   const missing = params.view === "missing";
   const where = and(
     missing ? isNull(stockPurchases.totalCost) : undefined,
-    q ? or(ilike(products.name, `%${q}%`), ilike(stockPurchases.note, `%${q}%`)) : undefined,
+    q ? or(ilike(products.name, likeTerm(q)), ilike(stockPurchases.note, likeTerm(q))) : undefined,
   );
 
   const [[totals], rows] = await Promise.all([

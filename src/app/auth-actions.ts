@@ -1,11 +1,13 @@
 "use server";
 
-import { audit } from "@/lib/audit";
-import { and, count, eq, gt, sql } from "drizzle-orm";
+import { randomBytes } from "node:crypto";
+import { and, count, eq, gt, or, sql } from "drizzle-orm";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import type { ActionState } from "@/components/action-form";
 import { db } from "@/db";
 import { loginAttempts, sessions, settings, users } from "@/db/schema";
+import { audit } from "@/lib/audit";
 import {
   createSession,
   destroySession,
@@ -14,8 +16,57 @@ import {
 } from "@/lib/auth";
 import { isTimeZone, text } from "@/lib/format";
 
+// Wrong tries are counted per email AND per place they come from, so a
+// stranger hammering someone's email only locks out the stranger: the real
+// person, signing in from somewhere else, is not blocked. The other two
+// limits stop one place trying many emails, and many places trying one email.
 const MAX_ATTEMPTS = 8;
+const MAX_FROM_PLACE = 40;
+const MAX_FOR_EMAIL = 100;
 const WINDOW_MINUTES = 15;
+const TOO_MANY = { error: "Too many tries. Please wait 15 minutes and try again." };
+
+const looksLikeEmail = (email: string) => email.length <= 200 && /^\S+@\S+\.\S+$/.test(email);
+
+// Where the request comes from, as the hosting platform reports it.
+async function place() {
+  const list = await headers();
+  const ip = (list.get("x-forwarded-for")?.split(",")[0] ?? list.get("x-real-ip") ?? "").trim();
+  return ip.slice(0, 64) || "unknown";
+}
+
+async function tooManyTries(email: string, ip: string) {
+  const since = new Date(Date.now() - WINDOW_MINUTES * 60 * 1000);
+  const [tries] = await db
+    .select({
+      here: sql<number>`count(*) filter (where ${loginAttempts.email} = ${email} and ${loginAttempts.ip} = ${ip})::int`,
+      fromPlace: sql<number>`count(*) filter (where ${loginAttempts.ip} = ${ip})::int`,
+      forEmail: sql<number>`count(*) filter (where ${loginAttempts.email} = ${email})::int`,
+    })
+    .from(loginAttempts)
+    .where(
+      and(
+        gt(loginAttempts.createdAt, since),
+        or(eq(loginAttempts.email, email), eq(loginAttempts.ip, ip)),
+      ),
+    );
+  return (
+    tries.here >= MAX_ATTEMPTS ||
+    tries.fromPlace >= MAX_FROM_PLACE ||
+    tries.forEmail >= MAX_FOR_EMAIL
+  );
+}
+
+async function noteWrongTry(email: string, ip: string) {
+  await db.insert(loginAttempts).values({ email, ip });
+  // Old tries are of no use: keep the list short.
+  await db.delete(loginAttempts).where(sql`${loginAttempts.createdAt} < now() - interval '1 day'`);
+}
+
+// Checking a password takes a moment. The same moment is spent when the
+// email is unknown, so the wait doesn't give away which emails exist.
+let decoy: Promise<string> | null = null;
+const decoyHash = () => (decoy ??= hashPassword(randomBytes(16).toString("hex")));
 
 export async function login(
   _state: ActionState,
@@ -25,26 +76,19 @@ export async function login(
   const password = String(form.get("password") ?? "");
   if (!email || !password) return { error: "Enter your email and password." };
 
-  const since = new Date(Date.now() - WINDOW_MINUTES * 60 * 1000);
-  const [{ attempts }] = await db
-    .select({ attempts: count() })
-    .from(loginAttempts)
-    .where(
-      and(eq(loginAttempts.email, email), gt(loginAttempts.createdAt, since)),
-    );
-  if (attempts >= MAX_ATTEMPTS) {
-    return { error: "Too many tries. Please wait 15 minutes and try again." };
-  }
+  if (!looksLikeEmail(email)) return { error: "Wrong email or password." };
+  const ip = await place();
+  if (await tooManyTries(email, ip)) return TOO_MANY;
 
   const [user] = await db
     .select()
     .from(users)
     .where(eq(users.email, email))
     .limit(1);
-  const valid =
-    !!user && user.active && (await verifyPassword(password, user.passwordHash));
-  if (!valid) {
-    await db.insert(loginAttempts).values({ email });
+  const known = !!user && user.active;
+  const matches = await verifyPassword(password, known ? user.passwordHash : await decoyHash());
+  if (!known || !matches) {
+    await noteWrongTry(email, ip);
     return { error: "Wrong email or password." };
   }
 
@@ -82,6 +126,10 @@ export async function setup(
     return { error: "Password must be at least 8 characters." };
   }
 
+  // Already set up: nothing to do here (checked again, under a lock, below).
+  const [{ already }] = await db.select({ already: count() }).from(users);
+  if (already > 0) redirect("/login");
+
   const passwordHash = await hashPassword(password);
   const userId = await db.transaction(async (tx) => {
     // Lock so two people can't both become the first owner.
@@ -116,39 +164,36 @@ export async function recover(
   if (!email || !code) return { error: "Enter your email and your recovery code." };
   if (password.length < 8) return { error: "New password must be at least 8 characters." };
 
-  const since = new Date(Date.now() - WINDOW_MINUTES * 60 * 1000);
-  const [{ attempts }] = await db
-    .select({ attempts: count() })
-    .from(loginAttempts)
-    .where(
-      and(eq(loginAttempts.email, email), gt(loginAttempts.createdAt, since)),
-    );
-  if (attempts >= MAX_ATTEMPTS) {
-    return { error: "Too many tries. Please wait 15 minutes and try again." };
-  }
+  if (!looksLikeEmail(email)) return { error: "That email and recovery code don't match." };
+  const ip = await place();
+  if (await tooManyTries(email, ip)) return TOO_MANY;
 
   const [user] = await db
     .select()
     .from(users)
     .where(eq(users.email, email))
     .limit(1);
-  const valid =
-    !!user &&
-    user.active &&
-    !!user.recoveryHash &&
-    (await verifyPassword(code, user.recoveryHash));
-  if (!valid) {
-    await db.insert(loginAttempts).values({ email });
+  const known = !!user && user.active && !!user.recoveryHash;
+  const matches = await verifyPassword(code, known ? user.recoveryHash! : await decoyHash());
+  if (!known || !matches) {
+    await noteWrongTry(email, ip);
     return { error: "That email and recovery code don't match." };
   }
 
+  const passwordHash = await hashPassword(password);
   await db.transaction(async (tx) => {
     await tx
       .update(users)
-      .set({ passwordHash: await hashPassword(password), recoveryHash: null })
+      .set({ passwordHash, recoveryHash: null })
       .where(eq(users.id, user.id));
     // Anyone still signed in with the old password is signed out.
     await tx.delete(sessions).where(eq(sessions.userId, user.id));
+  });
+  await audit(user, {
+    area: "account",
+    action: "account.recovered",
+    subject: user.name,
+    summary: "Set a new password with their recovery code",
   });
   await createSession(user.id);
   redirect("/settings");

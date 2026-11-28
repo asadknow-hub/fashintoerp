@@ -15,7 +15,7 @@ export default function LoginPage() {
       <div className="w-full max-w-sm">
         <h1 className="mb-1 text-2xl font-semibold tracking-tight">Sign in</h1>
         <p className="mb-6 text-sm text-stone-500">
-          Inventory, orders and chats in one place.
+          Stock, orders and customers in one place.
         </p>
         <Suspense>
           <Gate />

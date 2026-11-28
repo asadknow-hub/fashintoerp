@@ -71,6 +71,18 @@ export async function destroySession() {
   store.delete(COOKIE);
 }
 
+// After a password change: every other device is signed out, this one stays.
+export async function endOtherSessions(userId: string) {
+  const token = (await cookies()).get(COOKIE)?.value;
+  await db
+    .delete(sessions)
+    .where(
+      token
+        ? and(eq(sessions.userId, userId), sql`${sessions.tokenHash} <> ${hashToken(token)}`)
+        : eq(sessions.userId, userId),
+    );
+}
+
 // The signed-in user, or null. Checked once per request.
 export const getUser = cache(async (): Promise<CurrentUser | null> => {
   const token = (await cookies()).get(COOKIE)?.value;

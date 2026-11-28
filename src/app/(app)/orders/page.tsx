@@ -21,7 +21,15 @@ import {
   variants,
 } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
-import { formatDate, formatDateTime, formatMoney, isUuid, orderName } from "@/lib/format";
+import {
+  formatDate,
+  formatDateTime,
+  formatMoney,
+  isUuid,
+  likeTerm,
+  orderName,
+  phoneTerms,
+} from "@/lib/format";
 import { cityCode } from "@/lib/locations";
 import { getPrefs } from "@/lib/settings";
 import { OrderActions, type OrderCard } from "./order-actions";
@@ -93,7 +101,7 @@ export default async function OrdersPage({
 }: PageProps<"/orders">) {
   await requireUser();
   const params = await searchParams;
-  const q = typeof params.q === "string" ? params.q.trim() : "";
+  const q = typeof params.q === "string" ? params.q.trim().slice(0, 80) : "";
   const status = typeof params.status === "string" ? params.status : "";
   const filter = filters.find((f) => f.key === status) ?? filters[0];
   // The same orders as cards in columns, one column per step.
@@ -139,9 +147,14 @@ export default async function OrdersPage({
       : undefined,
     q
       ? or(
-          ilike(customers.name, `%${q}%`),
-          ilike(customers.phone, `%${q}%`),
-          ilike(orders.trackingNumber, `%${q}%`),
+          ilike(customers.name, likeTerm(q)),
+          ilike(customers.phone, likeTerm(q)),
+          ilike(orders.trackingNumber, likeTerm(q)),
+          // A number typed with spaces, a leading 0 or the country code.
+          ...phoneTerms(q).flatMap((term) => [
+            ilike(customers.phone, term),
+            ilike(orders.phone2, term),
+          ]),
           number !== null && number < 2 ** 31
             ? eq(orders.number, number)
             : undefined,

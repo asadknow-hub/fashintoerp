@@ -4,7 +4,7 @@ import { Empty, PageHeader, pageNumber, Pager } from "@/components/ui";
 import { db } from "@/db";
 import { auditLog } from "@/db/schema";
 import { requireOwner } from "@/lib/auth";
-import { formatDateTime } from "@/lib/format";
+import { formatDateTime, likeTerm } from "@/lib/format";
 import { getPrefs } from "@/lib/settings";
 
 const PAGE_SIZE = 100;
@@ -32,7 +32,7 @@ export default async function ActivityPage({ searchParams }: PageProps<"/activit
   const where = and(
     area ? eq(auditLog.area, area) : undefined,
     who ? eq(auditLog.userName, who) : undefined,
-    q ? or(ilike(auditLog.subject, `%${q}%`), ilike(auditLog.summary, `%${q}%`)) : undefined,
+    q ? or(ilike(auditLog.subject, likeTerm(q)), ilike(auditLog.summary, likeTerm(q))) : undefined,
   );
   const [[{ total }], rows, people] = await Promise.all([
     db.select({ total: count() }).from(auditLog).where(where),

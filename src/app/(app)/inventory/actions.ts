@@ -1,6 +1,6 @@
 "use server";
 
-import { and, eq, like } from "drizzle-orm";
+import { and, eq, inArray, like, or } from "drizzle-orm";
 import { refresh } from "next/cache";
 import type { ActionState } from "@/components/action-form";
 import { db } from "@/db";
@@ -16,7 +16,7 @@ import {
 import { audit, productSubject } from "@/lib/audit";
 import { requireUser } from "@/lib/auth";
 import { amount, isUuid, optional, text, wholeNumber } from "@/lib/format";
-import { isOurUrl, removeFile } from "@/lib/media";
+import { isOurUrl, removeFile, sameStore } from "@/lib/media";
 import { shelfHeld } from "@/lib/shelf";
 import { cleanTag } from "@/lib/media-rules";
 import { offerTotal } from "@/lib/offer";
@@ -85,6 +85,19 @@ export type NewProduct = {
   }[];
 };
 
+// A file that is already attached to a product: it shows where our file
+// store is, so new files can be checked against it.
+async function knownFile() {
+  const [row] = await db
+    .select({ url: productMedia.url })
+    .from(productMedia)
+    .where(like(productMedia.url, "https://%"))
+    .limit(1);
+  return row?.url ?? null;
+}
+const addresses = (items: { url: string; thumbUrl?: string | null }[]) =>
+  items.flatMap((item) => (item.thumbUrl ? [item.url, item.thumbUrl] : [item.url]));
+
 // A preview picture is optional, but when given it must be one of our files.
 const validThumb = (value: unknown) =>
   value === null || value === undefined || (typeof value === "string" && isOurUrl(value));
@@ -152,6 +165,9 @@ export async function createProduct(
       return { error: "One of the files did not come from our storage." };
     }
     if (item.kind !== "image" && item.kind !== "video") return { error: "Unknown file type." };
+  }
+  if (media.length && !sameStore(addresses(media), await knownFile())) {
+    return { error: "One of the files did not come from our storage." };
   }
 
   const taken = new Set<string>();
@@ -247,10 +263,13 @@ export async function discardUpload(url: string, thumbUrl?: string | null): Prom
   if (typeof url !== "string" || !isOurUrl(url) || !validThumb(thumbUrl)) {
     return { error: "Unknown file." };
   }
+  // Neither address may belong to a product, as its file or as its preview.
+  const both = thumbUrl ? [url, thumbUrl] : [url];
+  if (!sameStore(both, await knownFile())) return { error: "Unknown file." };
   const [attached] = await db
     .select({ id: productMedia.id })
     .from(productMedia)
-    .where(eq(productMedia.url, url))
+    .where(or(inArray(productMedia.url, both), inArray(productMedia.thumbUrl, both)))
     .limit(1);
   if (!attached) {
     await removeFile(url);
@@ -267,6 +286,7 @@ export async function updateProduct(
   form: FormData,
 ): Promise<ActionState> {
   const user = await requireUser();
+  if (!isUuid(String(productId))) return { error: "Product not found." };
   const name = text(form, "name");
   const sku = code(text(form, "sku"), 24) || null;
   const priceTyped = text(form, "price");
@@ -366,6 +386,9 @@ export async function updateProduct(
 
 export async function setArchived(productId: string, archived: boolean): Promise<ActionState> {
   const user = await requireUser();
+  if (!isUuid(String(productId)) || typeof archived !== "boolean") {
+    return { error: "Product not found." };
+  }
   await db.update(products).set({ archived }).where(eq(products.id, productId));
   await audit(user, {
     area: "products",
@@ -389,8 +412,11 @@ export async function addVariants(
   const size = optional(form, "size");
   const color = optional(form, "color");
   const stock = text(form, "stock") ? wholeNumber(form, "stock") : 0;
+  if (!isUuid(String(productId))) return { error: "Product not found." };
   if (!size && !color) return { error: "Enter a size or a color." };
-  if (!(stock >= 0)) return { error: "Stock must be a whole number, 0 or more." };
+  if (!(stock >= 0) || stock > 1_000_000) {
+    return { error: "Stock must be a whole number, 0 or more." };
+  }
 
   const [product] = await db
     .select({ name: products.name, sku: products.sku })
@@ -476,6 +502,7 @@ export async function updateVariants(
   form: FormData,
 ): Promise<ActionState> {
   const user = await requireUser();
+  if (!isUuid(String(productId))) return { error: "Product not found." };
   const rows = await db
     .select({ id: variants.id })
     .from(variants)
@@ -533,8 +560,9 @@ export async function updateVariants(
   return { ok: "Saved." };
 }
 
+// Pieces that come back from customers are put back on their order's page,
+// so the only thing typed straight into the grid is what was damaged or lost.
 const adjustments = {
-  returned: { reason: "return", sign: 1 },
   damaged: { reason: "damage", sign: -1 },
 } as const;
 
@@ -547,8 +575,9 @@ export async function adjustStockGrid(
 ): Promise<ActionState> {
   const user = await requireUser();
   const kindName = text(form, "kind");
+  if (!isUuid(String(productId))) return { error: "Product not found." };
+  if (!Object.hasOwn(adjustments, kindName)) return { error: "Choose what happened." };
   const kind = adjustments[kindName as keyof typeof adjustments];
-  if (!kind) return { error: "Choose what happened." };
   const note = optional(form, "note");
   try {
     const changed = await db.transaction(async (tx) => {
@@ -561,7 +590,9 @@ export async function adjustStockGrid(
       for (const row of rows) {
         if (text(form, `qty:${row.id}`) === "") continue;
         const quantity = wholeNumber(form, `qty:${row.id}`);
-        if (!(quantity >= 0)) throw new StockError("Use whole numbers, 0 or more.");
+        if (!(quantity >= 0) || quantity > 1_000_000) {
+          throw new StockError("Use whole numbers, 0 or more.");
+        }
         if (quantity === 0) continue;
         await changeStock(tx, {
           variantId: row.id,
@@ -1024,6 +1055,9 @@ export async function addMedia(input: {
   if (input.kind !== "image" && input.kind !== "video") return { error: "Unknown file type." };
   if (!tag) return { error: "Choose a tag." };
   if (typeof input.url !== "string" || !isOurUrl(input.url) || !validThumb(input.thumbUrl)) {
+    return { error: "That file did not come from our storage." };
+  }
+  if (!sameStore(addresses([input]), await knownFile())) {
     return { error: "That file did not come from our storage." };
   }
 

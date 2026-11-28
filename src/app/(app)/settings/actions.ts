@@ -7,7 +7,7 @@ import type { ActionState } from "@/components/action-form";
 import { db } from "@/db";
 import { deliveryCompanies, orders, settings, users } from "@/db/schema";
 import { audit } from "@/lib/audit";
-import { hashPassword, requireOwner, requireUser, verifyPassword } from "@/lib/auth";
+import { endOtherSessions, hashPassword, requireOwner, requireUser, verifyPassword } from "@/lib/auth";
 import { amount, isTimeZone, isUuid, text } from "@/lib/format";
 
 export async function updateBusiness(
@@ -50,13 +50,15 @@ export async function changePassword(
     .update(users)
     .set({ passwordHash: await hashPassword(next) })
     .where(eq(users.id, user.id));
+  // Anyone signed in elsewhere with the old password is signed out.
+  await endOtherSessions(user.id);
   await audit(user, {
     area: "account",
     action: "account.password",
     subject: user.name,
     summary: "Changed their own password",
   });
-  return { ok: "Password changed." };
+  return { ok: "Password changed. Other devices were signed out." };
 }
 
 // Letters and digits that are hard to mix up when written down.

@@ -1,7 +1,7 @@
 import { handleUpload, type HandleUploadBody } from "@vercel/blob/client";
 import { getUser } from "@/lib/auth";
 import { mediaMode } from "@/lib/media";
-import { ALLOWED_TYPES, MAX_VIDEO_BYTES } from "@/lib/media-rules";
+import { ALLOWED_TYPES, IMAGE_TYPES, MAX_IMAGE_BYTES, MAX_VIDEO_BYTES } from "@/lib/media-rules";
 
 // Gives the browser a short-lived permission to upload one file straight to
 // file storage. Big videos never pass through this server.
@@ -14,11 +14,13 @@ export async function POST(request: Request) {
     const result = await handleUpload({
       body,
       request,
-      onBeforeGenerateToken: async () => {
+      onBeforeGenerateToken: async (pathname) => {
         if (!(await getUser())) throw new Error("Please sign in again.");
+        // A picture's name says it is one: then only pictures, at their size.
+        const picture = /\.(jpe?g|png|webp|gif|avif)$/i.test(pathname);
         return {
-          allowedContentTypes: ALLOWED_TYPES,
-          maximumSizeInBytes: MAX_VIDEO_BYTES,
+          allowedContentTypes: picture ? IMAGE_TYPES : ALLOWED_TYPES,
+          maximumSizeInBytes: picture ? MAX_IMAGE_BYTES : MAX_VIDEO_BYTES,
           addRandomSuffix: true,
         };
       },
