@@ -9,6 +9,7 @@ import {
   customers,
   deliveryCompanies,
   orderItems,
+  orderNotes,
   orders,
   products,
   shipperRefClaims,
@@ -382,6 +383,14 @@ export async function createOrder(
         });
       }
 
+      // Words typed as the order's description are its first note.
+      const firstNote = form.get("notesAuto") === "1" ? null : optional(form, "notes");
+      if (firstNote) {
+        await tx
+          .insert(orderNotes)
+          .values({ orderId: order.id, body: firstNote.slice(0, 2000), userId: user.id, userName: user.name });
+      }
+
       // This person is done typing; their hold on the ref is no longer needed.
       await tx.delete(shipperRefClaims).where(eq(shipperRefClaims.userId, user.id));
 
@@ -442,25 +451,30 @@ function stamps(status: Status) {
 }
 const closed = ["cancelled", "returned"];
 
-// "Save Note" on the order page.
-export async function saveOrderNote(
+// "Add Note" on the order page. Notes work like the replies on a ticket: each
+// one is kept, with who wrote it and when.
+export async function addOrderNote(
   orderId: string,
   _state: ActionState,
   form: FormData,
 ): Promise<ActionState> {
   const user = await requireUser();
   if (!isUuid(orderId)) return { error: "Order not found." };
-  const note = optional(form, "notes");
-  await db.update(orders).set({ notes: note }).where(eq(orders.id, orderId));
+  const body = text(form, "note").slice(0, 2000);
+  if (!body) return { error: "Type the note first." };
+  const [order] = await db.select({ id: orders.id }).from(orders).where(eq(orders.id, orderId));
+  if (!order) return { error: "Order not found." };
+  // Added under the notes already there: nothing is overwritten.
+  await db.insert(orderNotes).values({ orderId, body, userId: user.id, userName: user.name });
   await audit(user, {
     area: "orders",
     action: "order.note",
     subject: await orderSubject(orderId),
-    summary: note ? `Changed the note to: ${note.slice(0, 200)}` : "Removed the note",
+    summary: `Added a note: ${body.slice(0, 200)}`,
     orderId,
   });
   refresh();
-  return { ok: "Note saved." };
+  return { ok: "Note added." };
 }
 
 // The pencil on the order page. Anyone can correct the date and the FO

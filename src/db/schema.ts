@@ -475,6 +475,25 @@ export const orderItems = pgTable(
   ],
 ).enableRLS();
 
+// The notes on an order, kept like the replies on a ticket: each one is
+// added under the last, with who wrote it and when. Nothing is overwritten.
+export const orderNotes = pgTable(
+  "order_notes",
+  {
+    id: id(),
+    orderId: uuid("order_id")
+      .notNull()
+      .references(() => orders.id, { onDelete: "cascade" }),
+    body: text("body").notNull(),
+    // The name is kept as well, so the note still says who wrote it if that
+    // account is deleted later.
+    userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
+    userName: text("user_name").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [index("order_notes_order_idx").on(t.orderId, t.createdAt)],
+).enableRLS();
+
 // The record of who did what and when: every change made in the system
 // writes one line here. Lines are never edited or removed by the app. The
 // person's name is kept on the line itself, so it still reads right after

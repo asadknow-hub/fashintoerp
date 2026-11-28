@@ -23,6 +23,7 @@ import {
   customers,
   deliveryCompanies,
   orderItems,
+  orderNotes,
   orders,
   productMedia,
   products,
@@ -32,7 +33,7 @@ import { requireUser } from "@/lib/auth";
 import { colorDot } from "@/lib/colors";
 import { formatDateTime, formatMoney, isUuid, orderName } from "@/lib/format";
 import { getPrefs } from "@/lib/settings";
-import { saveOrderNote } from "../actions";
+import { addOrderNote } from "../actions";
 import type { OrderCard } from "../order-actions";
 import {
   type BackItem,
@@ -100,7 +101,7 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
   if (!row) notFound();
   const { order, customer, company } = row;
 
-  const [{ currency, timezone }, items, companies, [replaces], replacedBy, logs, sellable] =
+  const [{ currency, timezone }, items, companies, [replaces], replacedBy, logs, notes, sellable] =
     await Promise.all([
       getPrefs(),
       itemsOf(id),
@@ -124,6 +125,12 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
         .where(eq(orders.exchangeOfId, order.id)),
       // Who did what on this order.
       db.select().from(auditLog).where(eq(auditLog.orderId, id)).orderBy(asc(auditLog.at)),
+      // Its notes, oldest first.
+      db
+        .select()
+        .from(orderNotes)
+        .where(eq(orderNotes.orderId, id))
+        .orderBy(asc(orderNotes.createdAt)),
       // Everything that can be put on an order, for the item editor (an
       // admin's tool): products on sale, plus what this order already holds.
       user.role !== "staff"
@@ -319,7 +326,6 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
   const extras = logs.filter(
     (line) =>
       [
-        "order.note",
         "order.edited",
         "order.items",
         "order.refund",
@@ -692,16 +698,32 @@ export default async function OrderPage({ params }: PageProps<"/orders/[id]">) {
                 <NotebookPen className="size-5 text-brand" />
                 <h2 className="text-base font-bold">Update Order / Notes</h2>
               </header>
+              {/* Like the replies on a ticket: every note stays, oldest
+                  first, with who wrote it and when. */}
+              {notes.length > 0 && (
+                <ol className="space-y-2 px-4 pb-3" data-note-list>
+                  {notes.map((note) => (
+                    <li key={note.id} className="rounded-lg bg-stone-50 px-3 py-2 text-sm">
+                      <p className="break-words whitespace-pre-wrap">{note.body}</p>
+                      <p className="mt-1 text-xs text-stone-500" data-note-by>
+                        <b className="font-semibold text-stone-700">{note.userName}</b> ·{" "}
+                        {formatDateTime(note.createdAt, timezone)}
+                      </p>
+                    </li>
+                  ))}
+                </ol>
+              )}
               <ActionForm
-                action={saveOrderNote.bind(null, order.id)}
-                submit="Save Note"
+                action={addOrderNote.bind(null, order.id)}
+                submit="Add Note"
+                working="Adding…"
                 className="space-y-3 px-4 pb-4"
                 submitClassName="btn-secondary border-brand-200 bg-brand-100 text-brand"
               >
                 <textarea
-                  name="notes"
-                  rows={3}
-                  defaultValue={order.notes ?? ""}
+                  name="note"
+                  rows={2}
+                  required
                   aria-label="Note"
                   placeholder="Add a note, update, or internal remark…"
                   className="input resize-y"

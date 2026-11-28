@@ -181,7 +181,11 @@ export default async function OrdersPage({
         deliveredOn: orders.deliveredAt,
         ref: orders.trackingNumber,
         instruction: orders.instruction,
-        notes: orders.notes,
+        // The latest note on the order.
+        notes: sql<string | null>`(
+          select n.body from order_notes n
+          where n.order_id = ${orders.id} order by n.created_at desc limit 1
+        )`,
         city: orders.city,
         area: orders.area,
         street: orders.street,

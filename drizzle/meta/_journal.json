@@ -176,6 +176,13 @@
       "when": 1795878042025,
       "tag": "0024_accounts_presence",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1795889779264,
+      "tag": "0025_order_notes",
+      "breakpoints": true
     }
   ]
 }
