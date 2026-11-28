@@ -541,8 +541,8 @@ export default async function OrdersPage({
                       {inside
                         ? [...inside.products].map(([product, what], index, all) => (
                             <span key={product} className="block">
-                              <span className="block text-xs text-stone-500">{product}</span>
-                              <span className="font-semibold">{what.join(", ")}</span>
+                              <span className="block text-[11px] text-stone-500">{product}</span>
+                              <span className="text-xs font-semibold">{what.join(", ")}</span>
                               {/* One button copies everything in the order: just
                                   the pieces, with product names when there are
                                   several products. */}
@@ -560,10 +560,10 @@ export default async function OrdersPage({
                           ))
                         : "—"}
                       {row.notes && (
-                        <span className="mt-0.5 block text-xs text-stone-500 italic">{row.notes}</span>
+                        <span className="mt-0.5 block text-[11px] text-stone-500 italic">{row.notes}</span>
                       )}
                     </td>
-                    <td className={cell + " max-w-52"} data-order-address>
+                    <td className={cell + " max-w-52 text-xs"} data-order-address>
                       {row.city || row.area || row.street ? (
                         <>
                           {/* Area with the city's code beside it, to keep the row short. */}
