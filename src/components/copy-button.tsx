@@ -40,7 +40,7 @@ export function CopyButton({ text, label }: { text: string; label: string }) {
       title={copied ? "Copied" : `Copy ${label}`}
       data-copy={label}
       className={
-        "ml-1 inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded align-middle transition " +
+        "ml-1 inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded align-middle transition [@media(hover:none)]:size-7 " +
         (copied
           ? "bg-emerald-100 text-emerald-700"
           : "text-stone-400 hover:bg-brand-100 hover:text-brand")

@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ActionForm } from "@/components/action-form";
+import { FreshOnVisit } from "@/components/fresh-on-visit";
 import { db } from "@/db";
 import { users } from "@/db/schema";
 import { requireOwner } from "@/lib/auth";
@@ -39,13 +40,17 @@ export default async function EditStaffPage({ params }: PageProps<"/staff/[id]">
         <h1 className="mt-1 text-xl font-semibold tracking-tight">{staff.name}</h1>
       </div>
 
-      <ActionForm
-        action={updateStaff.bind(null, staff.id)}
-        submit="Save changes"
-        className="card space-y-3 p-3"
-      >
-        <StaffFields staff={staff} self={self} mine={me.role} />
-      </ActionForm>
+      {/* Started clean on every visit: a password typed here earlier must
+          not still be in its box (and be set again) next time. */}
+      <FreshOnVisit>
+        <ActionForm
+          action={updateStaff.bind(null, staff.id)}
+          submit="Save changes"
+          className="card space-y-3 p-3"
+        >
+          <StaffFields staff={staff} self={self} mine={me.role} />
+        </ActionForm>
+      </FreshOnVisit>
 
       {!self && (
         <ActionForm

@@ -31,7 +31,6 @@ One place to run the business: stock, orders and customers.
   getting back in after a forgotten password. An owner without one can be
   locked out.
 - **Vercel plan.** The Hobby plan is for personal, non-commercial use.
-- **Chats** are built but not connected to Meta yet.
 
 ## Going live (one time)
 

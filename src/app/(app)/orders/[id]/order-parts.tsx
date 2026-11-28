@@ -91,7 +91,7 @@ export function OutcomeActions({
         {swapped
           ? `This order was exchanged with ${swapped}. A return or another exchange is made on that order, since the customer now has its pieces.`
           : delivered
-            ? "Clicking one of these starts the next workflow step in the roadmap (Return / Exchange)."
+            ? "The customer sends it back, or swaps it for something else."
             : "A return or an exchange can be started once the order is delivered."}
       </p>
       {delivered && (
@@ -207,7 +207,13 @@ export function ItemsBack({
                 <button
                   type="button"
                   disabled={working}
-                  onClick={() => settle(item.id, "stock")}
+                  onClick={() =>
+                    settle(
+                      item.id,
+                      "stock",
+                      "Put this back into stock? Only do it when the piece is in your hands: it can't be undone.",
+                    )
+                  }
                   className="btn btn-sm"
                 >
                   <PackageCheck className="size-3.5" /> Back in stock

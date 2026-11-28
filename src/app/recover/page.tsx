@@ -12,7 +12,7 @@ export default function RecoverPage() {
           Enter the recovery code you saved from Settings, and choose a new
           password. The code works once.
         </p>
-        <ActionForm action={recover} submit="Set new password" className="card space-y-3 p-4">
+        <ActionForm action={recover} submit="Set new password" working="Please wait…" className="card space-y-3 p-4">
           <Field label="Email">
             <input name="email" type="email" required autoComplete="email" className="input" />
           </Field>

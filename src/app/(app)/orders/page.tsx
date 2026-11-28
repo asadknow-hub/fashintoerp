@@ -1,6 +1,7 @@
 import { and, asc, count, desc, eq, exists, ilike, inArray, or, type SQL, sql } from "drizzle-orm";
 import { ArrowDown, ArrowUp, ArrowUpDown, Columns3, List } from "lucide-react";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { ClickableRow } from "@/components/clickable-row";
 import { CopyButton } from "@/components/copy-button";
 import {
@@ -246,6 +247,17 @@ export default async function OrdersPage({
       .orderBy(asc(deliveryCompanies.name)),
   ]);
 
+  // A page past the end (the list got shorter meanwhile): the last one instead.
+  if (!board && total > 0 && (page - 1) * PAGE_SIZE >= total) {
+    const last = Math.ceil(total / PAGE_SIZE);
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (typeof value === "string" && key !== "page") query.set(key, value);
+    }
+    if (last > 1) query.set("page", String(last));
+    redirect("/orders" + (query.size ? `?${query}` : ""));
+  }
+
   // What is in each order on this page: "1 M Black, 2 XL Grey" per product.
   const lines = rows.length
     ? await db
@@ -400,7 +412,7 @@ export default async function OrdersPage({
           board
             ? "Drag an order to its next step, or use its Actions button."
             : filter.key === "returned"
-              ? "Orders that came back. Their items were put back in stock."
+              ? "Orders that came back. Their items go back into stock when they are marked as received."
               : undefined
         }
         action={{ href: "/orders/new", label: "Create Order" }}
@@ -427,8 +439,14 @@ export default async function OrdersPage({
           className="flex overflow-hidden rounded-lg border border-stone-200 bg-white text-xs font-semibold"
         >
           {[
-            { on: !board, href: "/orders", label: "List", icon: List },
-            { on: board, href: "/orders?view=board", label: "Board", icon: Columns3 },
+            // What is being searched for stays when the view is switched.
+            { on: !board, href: board ? listHref({ status: "" }) : listHref({}), label: "List", icon: List },
+            {
+              on: board,
+              href: "/orders?" + new URLSearchParams({ view: "board", ...(q && { q }) }),
+              label: "Board",
+              icon: Columns3,
+            },
           ].map((view) => (
             <Link
               key={view.label}
@@ -447,7 +465,7 @@ export default async function OrdersPage({
           {filters.map((f) => (
             <Link
               key={f.key}
-              href={listHref({ status: f.key, q: "" })}
+              href={listHref({ status: f.key })}
               className={
                 "rounded-full px-3 py-1.5 text-xs font-medium " +
                 (filter.key === f.key
@@ -484,7 +502,7 @@ export default async function OrdersPage({
         >
           {filter.key === "returned" &&
             !q &&
-            "To record a return, open the order and set its status to Returned."}
+            "To record a return, open a delivered order's Actions and choose Create Return."}
           {!q && !filter.key && "Orders you create will show up here."}
         </Empty>
       ) : (

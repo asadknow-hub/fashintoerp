@@ -422,7 +422,11 @@ export function StepsModal({
                   {companies.length === 0 && (
                     <p className="mt-1.5 text-xs text-amber-800">
                       No delivery companies yet.{" "}
-                      <Link href="/settings#delivery-companies" className="font-semibold underline">
+                      <Link
+                        href="/settings#delivery-companies"
+                        onClick={onClose}
+                        className="font-semibold underline"
+                      >
                         Add them in Settings
                       </Link>{" "}
                       with their name and delivery charge.
@@ -515,7 +519,13 @@ export function StepsModal({
               <button type="button" onClick={() => setView("return")} className="btn-secondary">
                 <Undo2 className="size-4" /> Create Return
               </button>
-              <Link href={`/orders/new?exchange=${order.id}`} className="btn-secondary">
+              <Link
+                href={`/orders/new?exchange=${order.id}`}
+                // Left open, this pop-up would still be here (with old
+                // ticks) when the list is come back to.
+                onClick={onClose}
+                className="btn-secondary"
+              >
                 <Repeat className="size-4" /> Create Exchange
               </Link>
             </div>
@@ -538,6 +548,7 @@ export function StepsModal({
         <footer className="flex flex-wrap items-center gap-2 border-t border-stone-200 bg-stone-50 px-4 py-3">
           <Link
             href={`/orders/${order.id}`}
+            onClick={onClose}
             className="text-xs font-semibold text-brand hover:underline"
           >
             Open the full order

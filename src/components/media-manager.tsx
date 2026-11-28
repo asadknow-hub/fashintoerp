@@ -432,7 +432,7 @@ export function MediaManager({
                 onClick={() => {
                   if (window.confirm("Delete this file?")) act(() => onRemove(selected.id));
                 }}
-                className="absolute top-2 right-2 flex size-7 cursor-pointer items-center justify-center rounded-full bg-white/90 text-stone-700 opacity-0 shadow transition group-hover:opacity-100 hover:bg-rose-600 hover:text-white focus:opacity-100"
+                className="absolute top-2 right-2 flex size-7 cursor-pointer items-center justify-center rounded-full bg-white/90 text-stone-700 opacity-0 shadow transition group-hover:opacity-100 hover:bg-rose-600 hover:text-white focus:opacity-100 [@media(hover:none)]:opacity-100"
               >
                 <Trash2 className="size-3.5" />
               </button>

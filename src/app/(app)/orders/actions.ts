@@ -32,6 +32,13 @@ import { getPrefs } from "@/lib/settings";
 import { changeStock, StockError } from "@/lib/stock";
 import type { Tx } from "@/db";
 
+// A pop-up was saved after someone else had changed the order under it.
+class StaleError extends StockError {
+  constructor() {
+    super("Someone else changed this order a moment ago. Close this, check the order, and try again.");
+  }
+}
+
 // The database refuses a second order with the same FO number.
 const isDuplicate = (err: unknown) =>
   typeof err === "object" &&
@@ -367,6 +374,9 @@ export async function createOrder(
       return order.id;
     });
   } catch (err) {
+    // The screen was behind: it is brought up to date, so a second try
+    // starts from what the order really is now.
+    if (err instanceof StaleError) refresh();
     if (err instanceof StockError) return { error: err.message };
     if (isDuplicate(err)) return { error: `${shipperRef} is already used on another order.` };
     throw err;
@@ -592,6 +602,9 @@ export async function editOrder(
       }
     });
   } catch (err) {
+    // The screen was behind: it is brought up to date, so a second try
+    // starts from what the order really is now.
+    if (err instanceof StaleError) refresh();
     if (err instanceof StockError) return { error: err.message };
     if (isDuplicate(err)) return { error: `${ref} is already used on another order.` };
     throw err;
@@ -643,9 +656,7 @@ export async function deleteOrder(
       if (!order) throw new StockError("Order not found.");
       // Whether to put the pieces back was decided looking at an older state.
       if (was && was !== order.status) {
-        throw new StockError(
-          "Someone else changed this order a moment ago. Close this, check the order, and try again.",
-        );
+        throw new StaleError();
       }
       // Its old pieces are still coming back through the order that replaced it.
       const swapped = await liveExchange(tx, orderId);
@@ -683,6 +694,9 @@ export async function deleteOrder(
       await tx.delete(orders).where(eq(orders.id, orderId));
     });
   } catch (err) {
+    // The screen was behind: it is brought up to date, so a second try
+    // starts from what the order really is now.
+    if (err instanceof StaleError) refresh();
     if (err instanceof StockError) return { error: err.message };
     throw err;
   }
@@ -815,9 +829,7 @@ export async function setOrderProgress(
       // Someone else moved the order while this pop-up was open: saving
       // these ticks would undo what they did.
       if (was && was !== order.status) {
-        throw new StockError(
-          "Someone else changed this order a moment ago. Close this, check the order, and try again.",
-        );
+        throw new StaleError();
       }
       // A delivered order that was exchanged, or whose pieces have started
       // coming back, can't be un-delivered: its money and stock are settled.
@@ -867,6 +879,9 @@ export async function setOrderProgress(
         .where(eq(orders.id, orderId));
     });
   } catch (err) {
+    // The screen was behind: it is brought up to date, so a second try
+    // starts from what the order really is now.
+    if (err instanceof StaleError) refresh();
     if (err instanceof StockError) return { error: err.message };
     throw err;
   }
@@ -979,6 +994,9 @@ export async function cancelOrder(
       wasOut = isOut(order);
     });
   } catch (err) {
+    // The screen was behind: it is brought up to date, so a second try
+    // starts from what the order really is now.
+    if (err instanceof StaleError) refresh();
     if (err instanceof StockError) return { error: err.message };
     throw err;
   }
@@ -1071,6 +1089,9 @@ export async function createReturn(
         .where(and(eq(orderItems.orderId, orderId), eq(orderItems.backState, "none")));
     });
   } catch (err) {
+    // The screen was behind: it is brought up to date, so a second try
+    // starts from what the order really is now.
+    if (err instanceof StaleError) refresh();
     if (err instanceof StockError) return { error: err.message };
     throw err;
   }
@@ -1192,6 +1213,9 @@ export async function settleItem(
       };
     });
   } catch (err) {
+    // The screen was behind: it is brought up to date, so a second try
+    // starts from what the order really is now.
+    if (err instanceof StaleError) refresh();
     if (err instanceof StockError) return { error: err.message };
     throw err;
   }
@@ -1338,9 +1362,7 @@ export async function correctJourney(
         .for("update");
       if (!order) throw new StockError("Order not found.");
       if (was && was !== order.status) {
-        throw new StockError(
-          "Someone else changed this order a moment ago. Close this, check the order, and try again.",
-        );
+        throw new StaleError();
       }
       const name = orderName(order.ref, order.number);
       // What happened next is on the order that replaced this one.
@@ -1517,6 +1539,9 @@ export async function correctJourney(
       };
     });
   } catch (err) {
+    // The screen was behind: it is brought up to date, so a second try
+    // starts from what the order really is now.
+    if (err instanceof StaleError) refresh();
     if (err instanceof StockError) return { error: err.message };
     throw err;
   }
@@ -1696,6 +1721,9 @@ export async function editOrderItems(
       };
     });
   } catch (err) {
+    // The screen was behind: it is brought up to date, so a second try
+    // starts from what the order really is now.
+    if (err instanceof StaleError) refresh();
     if (err instanceof StockError) return { error: err.message };
     throw err;
   }

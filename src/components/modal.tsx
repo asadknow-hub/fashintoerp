@@ -2,6 +2,7 @@
 
 import { X } from "lucide-react";
 import { useEffect, useRef } from "react";
+import { keepPlainDigits } from "@/lib/format";
 
 // A pop-up over the page. It closes with the ✕, the Escape key, or a click
 // on the dimmed page behind it.
@@ -52,6 +53,7 @@ export function Modal({
         role="dialog"
         aria-modal="true"
         aria-label={title}
+        onInputCapture={keepPlainDigits}
         className={
           "card my-auto w-full overflow-hidden shadow-2xl " + (wide ? "max-w-3xl" : "max-w-lg")
         }

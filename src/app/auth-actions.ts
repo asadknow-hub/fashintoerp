@@ -102,9 +102,10 @@ export async function login(
   redirect("/");
 }
 
+// Ends the session. The screen then loads the sign-in page from scratch, so
+// nothing the person had open stays behind for whoever signs in next.
 export async function logout() {
   await destroySession();
-  redirect("/login");
 }
 
 // First-time setup: creates the business and the owner account.

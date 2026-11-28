@@ -120,7 +120,7 @@ export default async function DashboardPage() {
     {
       label: "Orders to send out",
       value: String(toShip.count),
-      note: "New, confirmed or packed",
+      note: "New or in the delivery portal",
       href: "/orders?status=open",
       icon: Truck,
       tone: "bg-rose-50 border-rose-100",

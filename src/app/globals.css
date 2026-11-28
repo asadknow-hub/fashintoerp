@@ -77,3 +77,13 @@ body {
     @apply flex items-center gap-2 text-sm font-bold text-stone-900;
   }
 }
+
+/* On a phone, a box with small text makes the browser zoom in every time it
+   is tapped. At this size it stays put. */
+@media (max-width: 639px) {
+  input:not([type="checkbox"]):not([type="radio"]),
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}

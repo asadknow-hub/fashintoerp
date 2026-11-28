@@ -1,14 +1,13 @@
 import { and, eq, inArray, lte, sql } from "drizzle-orm";
-import { Bell, Box, ChevronDown, LogOut, Settings, Truck, TriangleAlert, UserCog } from "lucide-react";
+import { Bell, Box, ChevronDown, Settings, Truck, TriangleAlert, UserCog } from "lucide-react";
 import Link from "next/link";
 import { Suspense } from "react";
-import { logout } from "@/app/auth-actions";
+import { SignOut } from "@/components/sign-out";
 import { Menu } from "@/components/menu";
 import { Crumbs, Nav } from "@/components/nav";
 import { SearchBox } from "@/components/search-box";
 import { Shell } from "@/components/shell";
 import { roleLabel } from "@/components/ui";
-import { SubmitButton } from "@/components/submit-button";
 import { db } from "@/db";
 import { orders, products, variants } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
@@ -174,11 +173,9 @@ async function UserMenu() {
           <UserCog className="size-4 text-stone-500" /> Staff
         </Link>
       )}
-      <form action={logout} className="border-t border-stone-200">
-        <SubmitButton className={item + " cursor-pointer disabled:opacity-50"} working="Signing out…">
-          <LogOut className="size-4 text-stone-500" /> Sign out
-        </SubmitButton>
-      </form>
+      <div className="border-t border-stone-200">
+        <SignOut className={item + " w-full cursor-pointer disabled:opacity-50"} />
+      </div>
     </Menu>
   );
 }

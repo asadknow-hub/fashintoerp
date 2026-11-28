@@ -147,6 +147,10 @@ export default async function NewOrderPage({
   return (
     <FreshOnVisit>
       <OrderForm
+        // An exchange is its own screen: leaving it for a normal order (or
+        // the other way round) starts clean.
+        key={original ? `exchange:${original.id}` : "new"}
+        userId={user.id}
         currency={currency}
         timezone={timezone}
         instructions={instructions}

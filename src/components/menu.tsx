@@ -53,6 +53,11 @@ export function Menu({
       </button>
       {shown && (
         <div
+          // Choosing something in it closes it, also when that leads to the
+          // page that is already open.
+          onClick={(event) => {
+            if ((event.target as HTMLElement).closest("a")) setOpen(false);
+          }}
           className={
             "card absolute top-full z-40 mt-1.5 w-64 overflow-hidden shadow-lg " +
             (align === "right" ? "right-0" : "left-0")

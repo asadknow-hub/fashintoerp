@@ -6,7 +6,7 @@ import { getPrefs } from "@/lib/settings";
 import { ProductCreator } from "./product-creator";
 
 export default async function NewProductPage() {
-  const [, { currency }] = await Promise.all([requireUser(), getPrefs()]);
+  const [user, { currency }] = await Promise.all([requireUser(), getPrefs()]);
   return (
     <>
       <PageHeader
@@ -14,7 +14,12 @@ export default async function NewProductPage() {
         subtitle="Add its photos, pick the sizes and colors, and type the stock into the grid."
       />
       <FreshOnVisit>
-        <ProductCreator mode={mediaMode()} offReason={mediaOffReason()} currency={currency} />
+        <ProductCreator
+          userId={user.id}
+          mode={mediaMode()}
+          offReason={mediaOffReason()}
+          currency={currency}
+        />
       </FreshOnVisit>
     </>
   );

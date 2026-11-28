@@ -60,15 +60,49 @@ export function optional(form: FormData, key: string) {
   return text(form, key) || null;
 }
 
+// Digits typed on an Arabic or Persian keyboard, as the usual 0-9 (and their
+// decimal and thousands marks as "." and ",").
+export function plainDigits(value: string) {
+  return value
+    .replace(/[\u0660-\u0669]/g, (digit) => String(digit.charCodeAt(0) - 0x0660))
+    .replace(/[\u06f0-\u06f9]/g, (digit) => String(digit.charCodeAt(0) - 0x06f0))
+    .replace(/\u066b/g, ".")
+    .replace(/\u066c/g, ",");
+}
+
+// A number as people type it, as one the system can read: "1,250" and
+// "1,250.50" lose their thousands commas, "12,5" gets a decimal point.
+export function plainNumber(value: string) {
+  const typed = plainDigits(value).replace(/\s/g, "");
+  if (/^\d{1,3}(,\d{3})+(\.\d+)?$/.test(typed)) return typed.replace(/,/g, "");
+  if (/^\d+,\d{1,2}$/.test(typed)) return typed.replace(",", ".");
+  return typed;
+}
+
+// For a form: while someone types, digits from an Arabic or Persian keyboard
+// are turned into 0-9 in the box itself, before anything reads them.
+export function keepPlainDigits(event: { target: EventTarget }) {
+  const box = event.target;
+  if (
+    (box instanceof HTMLInputElement || box instanceof HTMLTextAreaElement) &&
+    /[\u0660-\u0669\u06f0-\u06f9\u066b\u066c]/.test(box.value) &&
+    ["decimal", "numeric", "tel"].includes(box.inputMode)
+  ) {
+    const at = box.selectionStart;
+    box.value = plainDigits(box.value);
+    if (at !== null) box.setSelectionRange(at, at);
+  }
+}
+
 export function wholeNumber(form: FormData, key: string) {
-  const raw = text(form, key);
+  const raw = plainNumber(text(form, key));
   const n = Number(raw);
   return raw !== "" && Number.isInteger(n) ? n : NaN;
 }
 
 // Money from a form field, as a string like "12.50". Null when invalid.
 export function amount(form: FormData, key: string) {
-  const raw = text(form, key);
+  const raw = plainNumber(text(form, key));
   if (!raw) return "0";
   const n = Number(raw);
   // Capped well above any real amount, and below what the database can hold.
@@ -103,7 +137,7 @@ export function sortSizes<T extends string | null>(sizes: T[]): T[] {
 // Phone numbers are compared without spaces, dashes or brackets, so
 // "0300 123-4567" and "03001234567" are the same customer.
 export function cleanPhone(value: string) {
-  const digits = value.replace(/[^\d+]/g, "");
+  const digits = plainDigits(value).replace(/[^\d+]/g, "");
   return digits.startsWith("+") ? "+" + digits.slice(1).replace(/\+/g, "") : digits.replace(/\+/g, "");
 }
 

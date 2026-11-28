@@ -32,7 +32,7 @@ import {
 } from "react";
 import type { ActionState } from "@/components/action-form";
 import { colorDot } from "@/lib/colors";
-import { formatMoney, variantLabel } from "@/lib/format";
+import { formatMoney, keepPlainDigits, variantLabel } from "@/lib/format";
 import { COUNTRIES, DEFAULT_COUNTRY, UAE_AREAS, UAE_CITIES } from "@/lib/locations";
 import { pieceCost } from "@/lib/offer";
 import { createOrder, lookupCustomer, releaseShipperRef, watchShipperRef } from "../actions";
@@ -613,9 +613,13 @@ type Draft = {
   refAuto?: boolean;
 };
 
-function readDraft(): Draft | null {
+// A draft belongs to the person who typed it: on a shared computer the next
+// person to sign in must not be handed someone else's half-typed order.
+const draftKeyFor = (userId: string) => `${DRAFT_KEY}:${userId}`;
+
+function readDraft(key: string): Draft | null {
   try {
-    const saved = JSON.parse(window.localStorage.getItem(DRAFT_KEY) ?? "null") as Draft | null;
+    const saved = JSON.parse(window.localStorage.getItem(key) ?? "null") as Draft | null;
     if (!saved || !Array.isArray(saved.rows) || saved.rows.length === 0 || !saved.customer) {
       return null;
     }
@@ -631,15 +635,15 @@ function readDraft(): Draft | null {
   }
 }
 
-function writeDraft(draft: Draft | null) {
+function writeDraft(key: string, draft: Draft | null) {
   try {
-    if (!draft) return window.localStorage.removeItem(DRAFT_KEY);
+    if (!draft) return window.localStorage.removeItem(key);
     const rows = draft.rows.map((row) => ({
       ...row,
       color: row.color === undefined ? UNSET : row.color,
       size: row.size === undefined ? UNSET : row.size,
     }));
-    window.localStorage.setItem(DRAFT_KEY, JSON.stringify({ ...draft, rows }));
+    window.localStorage.setItem(key, JSON.stringify({ ...draft, rows }));
   } catch {
     // Storage can be blocked (private windows); the form still works without it.
   }
@@ -648,6 +652,8 @@ function writeDraft(draft: Draft | null) {
 const never = () => () => {};
 
 type Props = {
+  // Who is signed in: their unfinished order is kept under their own name.
+  userId: string;
   products: OrderProduct[];
   currency: string;
   timezone: string;
@@ -707,6 +713,7 @@ export function OrderForm(props: Props) {
 }
 
 function Editor({
+  userId,
   products,
   currency,
   timezone,
@@ -723,19 +730,31 @@ function Editor({
     defaults.phone ||
     defaults.exchange
   );
-  const [draft] = useState(() => (fromChat ? null : readDraft()));
+  const draftKey = draftKeyFor(userId);
+  const [draft] = useState(() => (fromChat ? null : readDraft(draftKey)));
   const [restored, setRestored] = useState(draft !== null);
-  const [rows, setRows] = useState<Row[]>(draft?.rows ?? [blank(0)]);
-  const [customer, setCustomer] = useState<Customer>(
-    draft?.customer ?? {
-      ...noCustomer(defaults.name, defaults.phone),
-      phone2: defaults.phone2,
-      country: defaults.country || DEFAULT_COUNTRY,
-      city: defaults.city,
-      area: defaults.area,
-      street: defaults.street,
-    },
-  );
+  const [rows, setRows] = useState<Row[]>(() => {
+    // A product taken off sale since the draft was typed can't be ordered:
+    // its line is left out rather than saved as an empty one.
+    const kept = (draft?.rows ?? []).filter(
+      (row) => !row.productId || products.some((product) => product.id === row.productId),
+    );
+    return kept.length ? kept : [blank(0)];
+  });
+  // The customer the screen starts with: the one it was opened for (an
+  // exchange, a link from a customer), or nobody.
+  const startCustomer = (): Customer => ({
+    ...noCustomer(defaults.name, defaults.phone),
+    phone2: defaults.phone2,
+    country: defaults.country || DEFAULT_COUNTRY,
+    city: defaults.city,
+    area: defaults.area,
+    street: defaults.street,
+  });
+  const [customer, setCustomer] = useState<Customer>(draft?.customer ?? startCustomer());
+  // What the last mobile-number lookup filled in, so a corrected number can
+  // replace it instead of leaving the first customer's details behind.
+  const [lookedUp, setLookedUp] = useState<Partial<Customer>>({});
   // Only the number is typed; "FO" always goes in front of it.
   // The box starts with the next FO number; it can be changed. A number that
   // was only ever the system's suggestion is refreshed when a draft comes
@@ -746,7 +765,17 @@ function Editor({
   );
   const fullRef = shipperRef ? REF_PREFIX + shipperRef : "";
   const [refNote, setRefNote] = useState<RefNote | null>(null);
-  const [today] = useState(() => todayIn(timezone));
+  // "Today" moves on when the screen is left open overnight.
+  const [today, setToday] = useState(() => todayIn(timezone));
+  useEffect(() => {
+    const check = () => setToday(todayIn(timezone));
+    window.addEventListener("focus", check);
+    document.addEventListener("visibilitychange", check);
+    return () => {
+      window.removeEventListener("focus", check);
+      document.removeEventListener("visibilitychange", check);
+    };
+  }, [timezone]);
   // Empty means today.
   const [orderDate, setOrderDate] = useState(draft?.orderDate ?? "");
   const [shippingFee, setShippingFee] = useState(draft?.shippingFee ?? "");
@@ -776,6 +805,7 @@ function Editor({
   useEffect(() => {
     if (fromChat) return;
     writeDraft(
+      draftKey,
       touched
         ? {
             rows,
@@ -793,6 +823,7 @@ function Editor({
     );
   }, [
     fromChat,
+    draftKey,
     touched,
     rows,
     customer,
@@ -839,19 +870,23 @@ function Editor({
   const startOver = () => {
     if (fullRef) void releaseShipperRef().catch(() => {});
     setRows([blank(0)]);
-    setCustomer(noCustomer());
+    // An exchange (or an order opened for a customer) goes back to how it
+    // started: still that customer, still the delivery charge as its COD.
+    setCustomer(startCustomer());
+    setLookedUp({});
     setShipperRef(nextRef);
     setRefAuto(true);
     setRefNote(null);
     setOrderDate("");
     setShippingFee("");
-    setCod("");
+    setCod(defaults.cod);
     setInstruction(usualInstruction);
     setNotes("");
     setNotesAuto(true);
     setKnown(null);
     setRestored(false);
-    writeDraft(null);
+    // Such an order never used the saved draft, so it must not clear one.
+    if (!fromChat) writeDraft(draftKey, null);
   };
 
   // Once saved: clear this screen, then open the new order. Remembering which
@@ -1041,16 +1076,31 @@ function Editor({
   const findCustomer = () =>
     startLookup(async () => {
       const found = await lookupCustomer(customer.phone);
+      // A box is filled in when it is empty, or still holds what the last
+      // lookup put there (the number was corrected): what a person typed
+      // themselves is never replaced.
+      const fields = ["name", "phone2", "city", "area", "street"] as const;
+      setCustomer((current) => {
+        const next = { ...current };
+        for (const field of fields) {
+          const untouched = !current[field].trim() || current[field] === lookedUp[field];
+          if (untouched) next[field] = found?.[field] ?? "";
+        }
+        if (found?.country) next.country = found.country;
+        return next;
+      });
+      setLookedUp(
+        found
+          ? {
+              name: found.name,
+              phone2: found.phone2,
+              city: found.city,
+              area: found.area,
+              street: found.street,
+            }
+          : {},
+      );
       if (!found) return setKnown(null);
-      setCustomer((current) => ({
-        ...current,
-        name: current.name.trim() || found.name,
-        phone2: current.phone2.trim() || found.phone2,
-        country: found.country || current.country,
-        city: current.city || found.city,
-        area: current.area || found.area,
-        street: current.street.trim() || found.street,
-      }));
       setKnown(
         `Returning customer: ${found.name} · ${found.orders} earlier ${found.orders === 1 ? "order" : "orders"}`,
       );
@@ -1066,6 +1116,7 @@ function Editor({
   return (
     <form
       className="space-y-4"
+      onInputCapture={keepPlainDigits}
       // Enter in a box must never create the order by accident: only the
       // Create Order button does.
       onKeyDown={(event) => {

@@ -20,7 +20,7 @@ export default function LoginPage() {
         <Suspense>
           <Gate />
         </Suspense>
-        <ActionForm action={login} submit="Sign in" className="card space-y-4 p-6">
+        <ActionForm action={login} submit="Sign in" working="Signing in…" className="card space-y-4 p-6">
           <Field label="Email">
             <input name="email" type="email" required autoComplete="email" className="input" />
           </Field>

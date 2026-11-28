@@ -132,9 +132,9 @@ const EMPTY: Draft = {
   media: [],
 };
 
-function readDraft(): Draft | null {
+function readDraft(key: string): Draft | null {
   try {
-    const saved = JSON.parse(window.localStorage.getItem(DRAFT_KEY) ?? "null");
+    const saved = JSON.parse(window.localStorage.getItem(key) ?? "null");
     if (!saved || typeof saved !== "object") return null;
     const draft = { ...EMPTY, ...saved } as Draft;
     if (!Array.isArray(draft.sizes) || !Array.isArray(draft.colors)) return null;
@@ -145,10 +145,10 @@ function readDraft(): Draft | null {
   }
 }
 
-function writeDraft(draft: Draft | null) {
+function writeDraft(key: string, draft: Draft | null) {
   try {
-    if (draft) window.localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
-    else window.localStorage.removeItem(DRAFT_KEY);
+    if (draft) window.localStorage.setItem(key, JSON.stringify(draft));
+    else window.localStorage.removeItem(key);
   } catch {
     // Storage can be blocked (private windows); the form still works without it.
   }
@@ -161,6 +161,8 @@ const never = () => () => {};
 
 // The draft lives in the browser, so the editor is only drawn there.
 export function ProductCreator(props: {
+  // Who is signed in: their unfinished product is kept under their own name.
+  userId: string;
   mode: MediaMode;
   offReason: string | null;
   currency: string;
@@ -174,16 +176,19 @@ export function ProductCreator(props: {
 }
 
 function Editor({
+  userId,
   mode,
   offReason,
   currency,
 }: {
+  userId: string;
   mode: MediaMode;
   offReason: string | null;
   currency: string;
 }) {
   const router = useRouter();
-  const [form, setForm] = useState<Draft>(() => readDraft() ?? EMPTY);
+  const draftKey = `${DRAFT_KEY}:${userId}`;
+  const [form, setForm] = useState<Draft>(() => readDraft(draftKey) ?? EMPTY);
   const [restored, setRestored] = useState(() => started(form));
   const [fill, setFill] = useState("");
   const [uploading, setUploading] = useState(false);
@@ -193,8 +198,8 @@ function Editor({
 
   // Keep a copy of everything typed, so a refresh doesn't lose it.
   useEffect(() => {
-    writeDraft(started(form) ? form : null);
-  }, [form]);
+    writeDraft(draftKey, started(form) ? form : null);
+  }, [form, draftKey]);
 
   // With no sizes (or colors) the product still has one column (or row).
   const columns: (string | null)[] = form.sizes.length ? sortSizes(form.sizes) : [null];
@@ -215,7 +220,7 @@ function Editor({
     setForm(EMPTY);
     setRestored(false);
     setError(null);
-    writeDraft(null);
+    writeDraft(draftKey, null);
     await Promise.all(files.map((item) => discardUpload(item.url, item.thumbUrl)));
   };
 
@@ -251,7 +256,7 @@ function Editor({
       // Saved: clear the form and its draft, then open the new product.
       setForm(EMPTY);
       setRestored(false);
-      writeDraft(null);
+      writeDraft(draftKey, null);
       router.push(`/inventory/${result.id}`);
     });
   };
@@ -261,7 +266,13 @@ function Editor({
       {restored && (
         <p className="card flex flex-wrap items-center gap-2 border-amber-300 bg-amber-50 px-3 py-1.5 text-xs text-amber-900">
           You have an unsaved product from before. It&apos;s all still here.
-          <button type="button" onClick={startOver} className="cursor-pointer font-semibold underline">
+          <button
+            type="button"
+            onClick={() => {
+              if (window.confirm("Throw away this unsaved product and its photos?")) void startOver();
+            }}
+            className="cursor-pointer font-semibold underline"
+          >
             Start over instead
           </button>
         </p>
@@ -527,8 +538,14 @@ function Editor({
                 type="button"
                 disabled={saving}
                 onClick={async () => {
+                  if (
+                    started(form) &&
+                    !window.confirm("Throw away what you typed for this product, and its photos?")
+                  ) {
+                    return;
+                  }
                   await startOver();
-                  router.push("/inventory");
+                  router.push("/products");
                 }}
                 className="btn-secondary"
               >
