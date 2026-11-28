@@ -93,21 +93,40 @@ async function liveExchange(tx: Tx, orderId: string) {
   return next ? orderName(next.ref, next.number) : null;
 }
 
+// An FO number is its number: FO46 and FO046 are the same one, however many
+// zeros are typed in front. The orders that already carry `ref`.
+const refDigits = (ref: string) => /^FO(\d{1,12})$/.exec(ref)?.[1];
+const sameRef = (ref: string) => {
+  const digits = refDigits(ref);
+  return digits === undefined
+    ? sql`upper(${orders.trackingNumber}) = ${ref}`
+    : sql`(
+        upper(${orders.trackingNumber}) = ${ref}
+        or (
+          ${orders.trackingNumber} ~* '^FO[0-9]{1,12}$'
+          and substring(${orders.trackingNumber} from 3)::numeric = ${digits}::numeric
+        )
+      )`;
+};
+
 // One shipper ref belongs to one order. Taking a lock on the ref first means
 // two people saving the same one at the same moment can't both get through.
 async function refuseUsedRef(tx: Tx, ref: string, exceptOrderId?: string) {
-  await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${ref}))`);
+  const digits = refDigits(ref);
+  // The lock is on the number itself, so two spellings of it share one.
+  const lockOn = digits === undefined ? ref : `FO${BigInt(digits)}`;
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${lockOn}))`);
   const [taken] = await tx
-    .select({ id: orders.id })
+    .select({ id: orders.id, ref: orders.trackingNumber })
     .from(orders)
-    .where(
-      and(
-        sql`upper(${orders.trackingNumber}) = ${ref}`,
-        exceptOrderId ? ne(orders.id, exceptOrderId) : undefined,
-      ),
-    )
+    .where(and(sameRef(ref), exceptOrderId ? ne(orders.id, exceptOrderId) : undefined))
     .limit(1);
-  if (taken) throw new StockError(`${ref} is already used on another order.`);
+  if (taken) {
+    const saved = (taken.ref ?? "").toUpperCase();
+    throw new StockError(
+      `${ref} is already used on another order` + (saved && saved !== ref ? ` (as ${saved}).` : "."),
+    );
+  }
 }
 
 type Line = { variantId: string; quantity: number; unitPrice: string; discount: string };
@@ -761,7 +780,7 @@ export async function watchShipperRef(typed: string) {
     db
       .select({ id: orders.id })
       .from(orders)
-      .where(sql`upper(${orders.trackingNumber}) = ${ref}`)
+      .where(sameRef(ref))
       .limit(1),
     db
       .select({ name: users.name })
