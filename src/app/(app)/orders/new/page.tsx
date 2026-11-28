@@ -1,4 +1,4 @@
-import { asc, desc, eq, isNotNull, sql } from "drizzle-orm";
+import { asc, eq, sql } from "drizzle-orm";
 import { ShoppingCart } from "lucide-react";
 import { FreshOnVisit } from "@/components/fresh-on-visit";
 import { db } from "@/db";
@@ -19,18 +19,10 @@ import { OrderForm, type OrderProduct } from "./order-form";
 export default async function NewOrderPage({
   searchParams,
 }: PageProps<"/orders/new">) {
-  const [user, params, { currency, timezone }, used, rows] = await Promise.all([
+  const [user, params, { currency, timezone }, rows] = await Promise.all([
     requireUser(),
     searchParams,
     getPrefs(),
-    // Instructions typed on earlier orders, most used first.
-    db
-      .select({ text: orders.instruction })
-      .from(orders)
-      .where(isNotNull(orders.instruction))
-      .groupBy(orders.instruction)
-      .orderBy(desc(sql`count(*)`), asc(orders.instruction))
-      .limit(12),
     db
       .select({
         id: variants.id,
@@ -117,14 +109,10 @@ export default async function NewOrderPage({
     sizes: sortSizes(product.sizes),
   }));
 
-  // "Open to Check Allowed" is always offered, then whatever was used before.
+  // The one saved instruction: filled in on every new order, and the only
+  // line in the dropdown. Anything else typed on an order stays on that
+  // order and is not added to the list.
   const instructions = ["Open to Check Allowed"];
-  for (const row of used) {
-    const line = row.text?.trim();
-    if (line && !instructions.some((known) => known.toLowerCase() === line.toLowerCase())) {
-      instructions.push(line);
-    }
-  }
   const nextRef = await nextRefNumber(user.id);
 
   // On an exchange the customer pays the delivery charge as the COD: the

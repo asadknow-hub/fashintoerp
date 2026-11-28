@@ -593,7 +593,7 @@ function ProductPicker({
 
 /* ---------- Draft: a half-typed order survives a refresh ---------- */
 
-const DRAFT_KEY = "fashinto:new-order:2";
+const DRAFT_KEY = "fashinto:new-order:3";
 const UNSET = "\u0000unset";
 
 type Draft = {
@@ -605,6 +605,8 @@ type Draft = {
   cod: string;
   instruction: string;
   notes: string;
+  // True while the description is the one written out from the items.
+  notesAuto?: boolean;
   // Only kept when a day other than today was picked.
   orderDate?: string;
   // True while the FO number is still the one the system filled in.
@@ -649,7 +651,7 @@ type Props = {
   products: OrderProduct[];
   currency: string;
   timezone: string;
-  // Lines offered under "Instruction": the usual one, then ones used before.
+  // Lines offered under "Instruction". The first one is filled in to begin with.
   instructions: string[];
   // The next FO number, which the form starts with.
   nextRef: string;
@@ -749,8 +751,12 @@ function Editor({
   const [orderDate, setOrderDate] = useState(draft?.orderDate ?? "");
   const [shippingFee, setShippingFee] = useState(draft?.shippingFee ?? "");
   const [cod, setCod] = useState(draft?.cod ?? defaults.cod);
-  const [instruction, setInstruction] = useState(draft?.instruction ?? "");
+  // The usual instruction is already in the box; it can be changed or emptied.
+  const usualInstruction = instructions[0] ?? "";
+  const [instruction, setInstruction] = useState(draft?.instruction ?? usualInstruction);
+  // The description writes itself from the items until someone types their own.
   const [notes, setNotes] = useState(draft?.notes ?? "");
+  const [notesAuto, setNotesAuto] = useState(draft ? draft.notesAuto !== false : true);
   const [known, setKnown] = useState<string | null>(null);
   const [, startLookup] = useTransition();
   const [state, run, pending] = useActionState(createOrder, null);
@@ -762,8 +768,8 @@ function Editor({
       customer.phone ||
       customer.street ||
       (shipperRef && !refAuto) ||
-      notes ||
-      instruction
+      (notes && !notesAuto) ||
+      instruction !== usualInstruction
     );
 
   // Keep a copy of everything typed, so a refresh doesn't lose it.
@@ -771,7 +777,18 @@ function Editor({
     if (fromChat) return;
     writeDraft(
       touched
-        ? { rows, customer, shipperRef, shippingFee, cod, instruction, notes, orderDate, refAuto }
+        ? {
+            rows,
+            customer,
+            shipperRef,
+            shippingFee,
+            cod,
+            instruction,
+            notes,
+            notesAuto,
+            orderDate,
+            refAuto,
+          }
         : null,
     );
   }, [
@@ -784,6 +801,7 @@ function Editor({
     cod,
     instruction,
     notes,
+    notesAuto,
     orderDate,
     refAuto,
   ]);
@@ -828,8 +846,9 @@ function Editor({
     setOrderDate("");
     setShippingFee("");
     setCod("");
-    setInstruction("");
+    setInstruction(usualInstruction);
     setNotes("");
+    setNotesAuto(true);
     setKnown(null);
     setRestored(false);
     writeDraft(null);
@@ -960,6 +979,29 @@ function Editor({
   });
 
   const ready = lines.filter((line) => line.variant && !line.problem);
+
+  // What is in the order, written out: "Linen Shirt - 1 XL Black, 2 M White".
+  // Products in the order they were added; the same piece on two lines is
+  // counted together.
+  const contents = new Map<string, Map<string, { label: string; quantity: number }>>();
+  for (const line of lines) {
+    if (!line.product || !line.variant || line.quantity === null) continue;
+    const pieces = contents.get(line.product.name) ?? new Map();
+    const piece = pieces.get(line.variant.id) ?? {
+      label: [line.variant.size, line.variant.color].filter(Boolean).join(" "),
+      quantity: 0,
+    };
+    piece.quantity += line.quantity;
+    pieces.set(line.variant.id, piece);
+    contents.set(line.product.name, pieces);
+  }
+  const written = [...contents]
+    .map(
+      ([product, pieces]) =>
+        `${product} - ${[...pieces.values()].map((piece) => [piece.quantity, piece.label].filter(Boolean).join(" ")).join(", ")}`,
+    )
+    .join("; ");
+  const description = notesAuto ? written : notes;
   const blocked = lines.some((line) => line.problem);
   const subtotal = ready.reduce((sum, line) => sum + line.lineTotal, 0);
   const delivery = Number(shippingFee) || 0;
@@ -1183,7 +1225,7 @@ function Editor({
             </label>
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-[1fr_1.4fr_1.6fr]">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-[1fr_2fr]">
             <label className="block">
               <Label required>COD</Label>
               <IconBox icon={Hash} className={codWrong ? "border-rose-500" : ""}>
@@ -1217,22 +1259,10 @@ function Editor({
                 label="Instruction"
                 value={instruction}
                 options={instructions}
-                placeholder="Pick a saved one or type your own"
+                placeholder="Instruction for the delivery (optional)"
                 onChange={setInstruction}
               />
             </div>
-            <label className="block sm:col-span-2 lg:col-span-1">
-              <Label>Description</Label>
-              <IconBox icon={Quote}>
-                <input
-                  name="notes"
-                  value={notes}
-                  onChange={(event) => setNotes(event.target.value)}
-                  placeholder="Order Description / Notes (Optional)"
-                  className={inside}
-                />
-              </IconBox>
-            </label>
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-[1fr_1fr_1fr_1.4fr]">
@@ -1314,23 +1344,11 @@ function Editor({
 
       {/* ---------- Order items ---------- */}
       <section className="card" data-items>
-        <header className={sectionHead + " justify-between rounded-t-xl"}>
+        <header className={sectionHead + " rounded-t-xl"}>
           <span className="flex items-center gap-2.5">
             <Package className="size-5 text-brand" strokeWidth={2} />
             <h2 className="text-base font-bold">Order Items</h2>
           </span>
-          <button
-            type="button"
-            onClick={() =>
-              setRows((current) => [
-                ...current,
-                blank(Math.max(...current.map((row) => row.key)) + 1),
-              ])
-            }
-            className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-lg border border-brand bg-white px-3.5 text-sm font-bold text-brand hover:bg-brand-50"
-          >
-            <Plus className="size-4" strokeWidth={2.4} /> Add Product
-          </button>
         </header>
 
         {products.length === 0 ? (
@@ -1615,21 +1633,79 @@ function Editor({
                 );
               })}
             </div>
+            {/* One more item, starting from the product of the line above. */}
+            <button
+              type="button"
+              data-add-item
+              aria-label="Add another item"
+              title="Add another item"
+              onClick={() =>
+                setRows((current) => [
+                  ...current,
+                  {
+                    ...blank(Math.max(...current.map((row) => row.key)) + 1),
+                    productId: current[current.length - 1]?.productId ?? "",
+                  },
+                ])
+              }
+              className="mt-3 inline-flex size-9 cursor-pointer items-center justify-center rounded-lg border border-brand bg-white text-brand hover:bg-brand-50"
+            >
+              <Plus className="size-5" strokeWidth={2.4} />
+            </button>
           </div>
         )}
       </section>
 
       {/* ---------- Summary and buttons ---------- */}
       <div className="flex flex-wrap items-start gap-4">
-        <button
-          type="button"
-          onClick={() => {
-            if (window.confirm("Clear this order and start again?")) startOver();
-          }}
-          className="btn-secondary h-11 px-4"
-        >
-          <Trash2 className="size-4" /> Clear Order
-        </button>
+        <div className="min-w-64 flex-1 space-y-3">
+          <button
+            type="button"
+            onClick={() => {
+              if (window.confirm("Clear this order and start again?")) startOver();
+            }}
+            className="btn-secondary h-11 px-4"
+          >
+            <Trash2 className="size-4" /> Clear Order
+          </button>
+          <label className="block" data-description>
+            <Label>Description</Label>
+            <textarea
+              name="notes"
+              aria-label="Description"
+              rows={2}
+              value={description}
+              onChange={(event) => {
+                setNotes(event.target.value);
+                setNotesAuto(false);
+              }}
+              placeholder="Fills in by itself once the items are chosen"
+              className="input min-h-16 w-full resize-y py-2 leading-snug"
+            />
+            {/* Left as written from the items, nothing extra is saved: the
+                order's description then always follows its items. */}
+            <input type="hidden" name="notesAuto" value={notesAuto ? "1" : ""} />
+            <span className="mt-1 block text-xs text-stone-500">
+              {notesAuto ? (
+                "Written from the items. Type here to use your own words."
+              ) : (
+                <>
+                  Your own words.{" "}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNotes("");
+                      setNotesAuto(true);
+                    }}
+                    className="cursor-pointer font-semibold text-brand underline"
+                  >
+                    Write it from the items again
+                  </button>
+                </>
+              )}
+            </span>
+          </label>
+        </div>
 
         <div className="card ml-auto w-full max-w-md p-3 text-sm" data-summary>
           <dl className="tabular-nums">

@@ -303,7 +303,9 @@ export async function createOrder(
           codAmount,
           total: total.toFixed(2),
           instruction: optional(form, "instruction"),
-          notes: optional(form, "notes"),
+          // A description left as written from the items is not kept: the
+          // list and the order page write it from the items themselves.
+          notes: form.get("notesAuto") === "1" ? null : optional(form, "notes"),
           trackingNumber: shipperRef,
           exchangeOfId: exchangeOf || null,
           refundBase,
